@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="CiteProof logo" width="420">
+</p>
+
 # CiteProof
 
 Audit a reference list, and the claims those references are meant to support, without trusting an AI's word that they are real.
