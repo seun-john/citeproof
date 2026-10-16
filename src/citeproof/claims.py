@@ -10,7 +10,7 @@ import re
 from collections import Counter
 from typing import Any
 
-from .core import InputError, finding, report, require
+from .core import InputError, coverage, finding, report, require
 
 NUMBER = re.compile(r"(?<![\w.])[+-]?\d[\d,]*(?:\.\d+)?\s?%?")
 
@@ -36,7 +36,13 @@ def _squash(text: str) -> str:
 
 def claimtrace(data: dict[str, Any]) -> dict[str, Any]:
     out: list[dict[str, Any]] = []
-    for claim in require(data, "claims", list):
+    claims = require(data, "claims", list)
+    undecided: dict[str, int] = {}
+
+    def undecided_because(reason: str) -> None:
+        undecided[reason] = undecided.get(reason, 0) + 1
+
+    for claim in claims:
         text = require(claim, "text", str)
         source = claim.get("source")
         if not source:
@@ -46,9 +52,11 @@ def claimtrace(data: dict[str, Any]) -> dict[str, Any]:
             raise InputError("A claim's 'source' must be an object")
         passage = source.get("passage")
         if not passage:
+            undecided_because("no_source_passage")
             out.append(finding("SOURCE_UNAVAILABLE", "No source passage was supplied.", claim=text))
             continue
         if source.get("kind", "full_text") != "full_text":
+            undecided_because("abstract_or_snippet_only")
             out.append(
                 finding(
                     "HUMAN_REVIEW_REQUIRED",
@@ -68,6 +76,7 @@ def claimtrace(data: dict[str, Any]) -> dict[str, Any]:
             )
         else:
             message = "A source passage is attached; whether it supports the claim needs a person."
+        undecided_because("needs_human_judgement")
         out.append(
             finding(
                 "HUMAN_REVIEW_REQUIRED",
@@ -80,4 +89,18 @@ def claimtrace(data: dict[str, Any]) -> dict[str, Any]:
                 numbers_missing_from_passage=missing,
             )
         )
-    return report("ClaimTrace", out, scope="evidence routing only; support is never decided")
+    return report(
+        "ClaimTrace",
+        out,
+        coverage=coverage(
+            "claims",
+            len(claims),
+            len(claims) - sum(undecided.values()),
+            undecided,
+            notes=[
+                "only a missing citation is decided here; whether a passage supports a claim "
+                "is never decided and is left to a person"
+            ],
+        ),
+        scope="evidence routing only; support is never decided",
+    )

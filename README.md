@@ -67,7 +67,9 @@ Findings: `NO_CITATION`, `SOURCE_UNAVAILABLE`, and `HUMAN_REVIEW_REQUIRED` for e
 
 ## Options common to every command
 
-`-o report.json`, `--html report.html`, and `--strict` (exit 1 when any finding is not `VERIFIED` for `check`, or any finding at all for `claims`). Exit codes: 0 audit completed, 1 strict findings, 2 unusable input. A completed audit that reports problems exits 0 unless you pass `--strict`.
+`-o report.json`, `--html report.html`, and `--strict` (exit 1 when any finding is not `VERIFIED` for `check`, or any finding at all for `claims`). Exit codes: 0 audit completed, 1 strict findings, 2 unusable input, 3 `--min-coverage` was not met. A completed audit that reports problems exits 0 unless you pass `--strict`.
+
+**Coverage.** `check` and `claims` add a `coverage` object and print a line on stderr, for example `coverage: decided 37 of 60 references; 23 could not be checked (not_in_catalogue 15, no_doi 8)`. For `check` the items are the references: one is decided when it matched a catalogue record (`VERIFIED` or `METADATA_MISMATCH`) and undecided when it has no DOI or its DOI is not in the catalogue you supplied. Undecided does not mean fabricated; this tool never looks anything up online. For `claims` the items are the claims, and only a missing citation is decided; the rest are undecided (`no_source_passage`, `abstract_or_snippet_only`, `needs_human_judgement`) because support is never decided here. `--min-coverage PCT` exits 3 when fewer than PCT percent of items were decided and nothing else failed.
 
 ## Limits
 

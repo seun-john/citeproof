@@ -11,7 +11,7 @@ import re
 from difflib import SequenceMatcher
 from typing import Any
 
-from .core import InputError, finding, norm, report, require
+from .core import InputError, coverage, finding, norm, report, require
 
 DOI_PREFIX = re.compile(r"^(?:https?://)?(?:dx\.)?doi\.org/|^doi:\s*", re.I)
 TITLE_NEAR = 0.9
@@ -180,6 +180,8 @@ def citeproof(data: dict[str, Any]) -> dict[str, Any]:
 
     out: list[dict[str, Any]] = []
     seen: dict[str, str] = {}
+    undecided = {"no_doi": 0, "not_in_catalogue": 0}
+    retraction_unknown = 0
     for ref in refs:
         doi = normalise_doi(ref.get("doi"))
         key = doi or norm(ref.get("title", ""))
@@ -196,6 +198,7 @@ def citeproof(data: dict[str, Any]) -> dict[str, Any]:
             seen[key] = ref["id"]
         record = catalogue.get(doi) if doi else None
         if record is None:
+            undecided["no_doi" if not doi else "not_in_catalogue"] += 1
             reason = "has no DOI" if not doi else "is not in the supplied catalogue"
             out.append(
                 finding(
@@ -228,6 +231,7 @@ def citeproof(data: dict[str, Any]) -> dict[str, Any]:
                     )
                 )
             elif "retracted" not in record:
+                retraction_unknown += 1
                 out.append(
                     finding(
                         "NEEDS_REVIEW", "Retraction status was not supplied.", reference=ref["id"]
@@ -247,8 +251,26 @@ def citeproof(data: dict[str, Any]) -> dict[str, Any]:
                 "MISSING_REFERENCE", "Cited in the text but not in the bibliography.", citation=cite
             )
         )
+    notes = []
+    if undecided["not_in_catalogue"] or undecided["no_doi"]:
+        notes.append(
+            "a reference with no record in the supplied catalogue is undecided, not fabricated; "
+            "this tool never looks anything up online"
+        )
+    if retraction_unknown:
+        notes.append(
+            f"{retraction_unknown} reference(s) matched a record that carries no retraction "
+            "flag, so their retraction status is unknown"
+        )
     return report(
         "CiteProof",
         out,
+        coverage=coverage(
+            "references",
+            len(refs),
+            len(refs) - sum(undecided.values()),
+            undecided,
+            notes=notes,
+        ),
         scope="comparison with a catalogue you supply; no online lookup, no manuscript parsing",
     )

@@ -298,6 +298,81 @@ def test_cli_end_to_end(tmp_path: Path) -> None:
     assert "CiteProof" in (tmp_path / "r.html").read_text(encoding="utf-8")
 
 
+def test_check_coverage_counts_references_that_had_a_record() -> None:
+    refs = [
+        ref(id="a", doi="10.1/x"),  # in the catalogue, matches
+        ref(id="b", doi="10.1/y", title="Other"),  # in the catalogue, but the title differs
+        ref(id="c", doi="10.9/none"),  # DOI not in the catalogue
+        ref(id="d", doi=""),  # no DOI at all
+    ]
+    catalogue = [rec(doi="10.1/x"), rec(doi="10.1/y")]
+    block = run(refs, catalogue, ["a", "b", "c", "d"])["coverage"]
+    assert (block["unit"], block["items"], block["decided"], block["undecided"]) == (
+        "references",
+        4,
+        2,
+        2,
+    )
+    assert block["reasons"] == {"no_doi": 1, "not_in_catalogue": 1}
+    assert block["decided"] + block["undecided"] == block["items"]
+    assert "never looks anything up online" in block["notes"][0]
+
+
+def test_check_coverage_notes_unknown_retraction_status() -> None:
+    unflagged = rec()
+    unflagged.pop("retracted")
+    block = run([ref(id="a")], [unflagged], ["a"])["coverage"]
+    assert block["decided"] == 1
+    assert any("no retraction flag" in n for n in block["notes"])
+    clean = run([ref(id="a")], [rec()], ["a"])["coverage"]
+    assert clean["notes"] == [] and clean["reasons"] == {}
+
+
+def claims_report(claims: list[dict[str, Any]]) -> dict[str, Any]:
+    from citeproof.claims import claimtrace
+
+    return claimtrace({"claims": claims})
+
+
+def test_claims_coverage_decides_only_missing_citations() -> None:
+    passage = "Sleep improved by 20 percent."
+    claims = [
+        {"text": "No source here."},  # NO_CITATION: decided
+        {"text": "Sleep improved.", "source": {"id": "s1"}},  # no passage
+        {"text": "Sleep improved.", "source": {"id": "s2", "passage": passage, "kind": "abstract"}},
+        {"text": "Sleep improved by 20 percent.", "source": {"id": "s3", "passage": passage}},
+    ]
+    block = claims_report(claims)["coverage"]
+    assert (block["unit"], block["items"], block["decided"], block["undecided"]) == (
+        "claims",
+        4,
+        1,
+        3,
+    )
+    assert block["reasons"] == {
+        "abstract_or_snippet_only": 1,
+        "needs_human_judgement": 1,
+        "no_source_passage": 1,
+    }
+    assert sum(block["reasons"].values()) == block["undecided"]
+    assert "never decided" in block["notes"][0]
+
+
+def test_cli_min_coverage_for_check(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    data = {
+        "references": [ref(id="a", doi="10.1/x"), ref(id="b", doi="10.9/none")],
+        "catalogue": [rec(doi="10.1/x")],
+        "citations": ["a", "b"],
+    }
+    src = tmp_path / "in.json"
+    src.write_text(json.dumps(data), encoding="utf-8")
+    out = str(tmp_path / "r.json")
+    assert main(["check", str(src), "-o", out, "--min-coverage", "50"]) == 0
+    assert "coverage: decided 1 of 2 references; 1 could not be checked" in capsys.readouterr().err
+    assert main(["check", str(src), "-o", out, "--min-coverage", "51"]) == 3
+    assert main(["check", str(src), "-o", out, "--strict", "--min-coverage", "100"]) == 1
+
+
 def test_cli_strict_flags_problems(tmp_path: Path) -> None:
     src = tmp_path / "in.json"
     src.write_text(
