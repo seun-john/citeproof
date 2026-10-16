@@ -46,6 +46,11 @@ citeproof check input.json -o report.json --html report.html
 
 DOIs are compared after removing `https://doi.org/`, `http://dx.doi.org/`, `doi:` and trailing punctuation, and lowercasing. Author lists can be arrays or `"A; B and C"` strings. Years compare by their four digits, so `2020a` equals `2020`.
 
+Two equivalences are accepted rather than reported as mismatches, and are listed in the finding's `accepted_equivalences` so they stay visible:
+
+- **Abbreviated journal names.** `Nat Prod Rep` matches `Natural Product Reports`, `N Engl J Med` matches `New England Journal of Medicine`, in either direction. Each word must be the same word or its beginning (plus a few standard forms such as `Natl`), the word count must agree once `of`, `the` and `and` are ignored, and a single closing letter must match exactly, so `Nature` is not `Nature Medicine` and `Phys Rev A` is not `Physical Review Applied`. A subtitle after a colon in the catalogue name may be left out. Abbreviations that omit a word, or that are not on this pattern, are still reported as a journal mismatch.
+- **A `RETRACTED:`, `Retraction:` or `Withdrawn:` prefix on a title.** Publishers add it to the catalogue title; the citation does not carry it. The prefix is ignored for the comparison only. The retraction itself is still reported through `RETRACTED` when the catalogue flags it.
+
 ## Check claims
 
 ```bash

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `check`: an abbreviated journal name (`Nat Prod Rep`) is accepted as the catalogue's full name (`Natural Product Reports`), and a `RETRACTED:` / `Retraction:` / `Withdrawn:` prefix on the catalogue title is ignored in the title comparison. Both are listed in `accepted_equivalences` on the finding. Different journals are still `METADATA_MISMATCH`.
+
 ## 0.1.0
 
 First release.

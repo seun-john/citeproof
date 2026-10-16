@@ -82,6 +82,84 @@ def test_title_typo_vs_different_title() -> None:
     assert far["findings"][0]["evidence"]["differences"]["title"]["note"] == "different title"
 
 
+@pytest.mark.parametrize(
+    ("short", "full"),
+    [
+        ("Nat Prod Rep", "Natural Product Reports"),
+        ("Nat. Prod. Rep.", "Natural Product Reports"),
+        ("J Am Chem Soc", "Journal of the American Chemical Society"),
+        (
+            "Proc Natl Acad Sci U S A",
+            "Proceedings of the National Academy of Sciences of the United States of America",
+        ),
+        ("Nature Commun.", "Nature Communications"),
+        ("Phys Rev Lett", "Physical Review Letters"),
+        ("Lancet", "The Lancet"),
+        ("PLoS ONE", "PLOS ONE"),
+        ("Ann Intern Med", "Annals of Internal Medicine"),
+        ("N Engl J Med", "New England Journal of Medicine"),
+        ("Eur Respir J", "European Respiratory Journal"),
+        ("American J Agri Economics", "American Journal of Agricultural Economics"),
+        ("SIAM J Control Optim", "SIAM Journal on Control and Optimization"),
+        ("Proc R Soc B", "Proceedings of the Royal Society B: Biological Sciences"),
+        ("Natl Tax J", "National Tax Journal"),
+    ],
+)
+def test_abbreviated_journal_is_accepted_and_noted(short: str, full: str) -> None:
+    for cited, held in ((short, full), (full, short)):
+        result = run([ref(journal=cited)], [rec(journal=held)], ["a"])
+        assert statuses(result) == ["VERIFIED"], (cited, held)
+        if cited != held and cited.casefold() != held.casefold():
+            note = result["findings"][0]["evidence"]["accepted_equivalences"]
+            assert note == ["journal: abbreviation accepted"]
+
+
+@pytest.mark.parametrize(
+    ("cited", "held"),
+    [
+        ("Nature", "Nature Medicine"),
+        ("Phys Rev A", "Physical Review Applied"),
+        ("Phys Rev A", "Physical Review B"),
+        ("J Chem Phys", "Journal of Chemical Physics Letters"),
+        ("Lancet Oncol", "The Lancet"),
+        ("Nat Med", "Nature Methods"),
+        ("Cell", "Cell Reports"),
+        ("Proc R Soc A", "Proceedings of the Royal Society B: Biological Sciences"),
+        ("N Engl J Med", "New England Journal of Medicine Reports"),
+        ("J Med", "Journal of Mathematics"),
+    ],
+)
+def test_different_journals_are_still_mismatches(cited: str, held: str) -> None:
+    for a, b in ((cited, held), (held, cited)):
+        result = run([ref(journal=a)], [rec(journal=b)], ["a"])
+        assert statuses(result) == ["METADATA_MISMATCH"], (a, b)
+        assert "journal" in result["findings"][0]["evidence"]["differences"]
+
+
+def test_retraction_prefix_on_catalogue_title_is_not_a_title_mismatch() -> None:
+    result = run([ref()], [rec(title="RETRACTED: A Study of Things", retracted=True)], ["a"])
+    assert statuses(result) == ["VERIFIED", "RETRACTED"]
+    got = result["findings"][0]["evidence"]["accepted_equivalences"]
+    assert got == ["title: retraction or withdrawal prefix ignored"]
+
+
+@pytest.mark.parametrize("prefix", ["Retraction: ", "WITHDRAWN - ", "Retracted: "])
+def test_notice_prefix_variants(prefix: str) -> None:
+    result = run([ref()], [rec(title=prefix + "A Study of Things")], ["a"])
+    assert result["findings"][0]["status"] == "VERIFIED"
+
+
+def test_title_still_compared_after_the_prefix_is_removed() -> None:
+    result = run([ref()], [rec(title="RETRACTED: Something else entirely")], ["a"])
+    assert result["findings"][0]["status"] == "METADATA_MISMATCH"
+    assert result["findings"][0]["evidence"]["differences"]["title"]["note"] == "different title"
+
+
+def test_exact_matches_carry_no_accepted_equivalences() -> None:
+    result = run([ref()], [rec()], ["a"])
+    assert "accepted_equivalences" not in result["findings"][0]["evidence"]
+
+
 def test_year_in_different_formats() -> None:
     assert statuses(run([ref(year="2020a")], [rec()], ["a"])) == ["VERIFIED"]
 
