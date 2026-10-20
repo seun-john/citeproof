@@ -18,11 +18,15 @@ It runs CiteProof's `check` command, unchanged: each reference is looked up **by
 
 The summary counts each reference once, by its comparison result: **Verified**, **Metadata mismatch**, or **No verdict** (`NEEDS_REVIEW`: no DOI, or a DOI that is not in the catalogue). The three counts always add up to the number of references, and none is shown more prominently than another. `DUPLICATE`, `RETRACTED`, `UNCITED_REFERENCE`, `MISSING_REFERENCE` and "retraction status not supplied" are listed as additional flags and are not part of those three counts.
 
+For a reference that gets no verdict, the page also checks whether the catalogue holds a record with the same **title**, and if so shows "Possible match by title (advisory)". This runs on your device, never changes the verdict, and exists because CiteProof matches by DOI only: it helps with citations that have no DOI or a wrong one. A person has to confirm it is the same work.
+
 The page has a "What this does not check" panel. In short: it does not decide whether a reference exists in the real world, whether a source supports a claim, whether a source is good, who wrote a text, citation style, or anything an academic-integrity process would decide. A reference that is "not found in this catalogue" says nothing about whether it is real.
 
 ## Limits
 
-- **Formats.** References: BibTeX or CiteProof JSON. CiteProof does not parse formatted text such as APA lists, and this demo does not try. Catalogue: CiteProof's JSON, or CSV. **CSV is a convenience of this demo, not a CiteProof format**; it is converted to CiteProof's records by `docs/py/demo_logic.py` (a blank `retracted` cell becomes "not supplied", not "false"). Rows with no DOI are skipped and counted.
+- **Pasted text is read by the demo's own best-effort reader, not by CiteProof.** CiteProof reads only BibTeX or JSON. `docs/py/text_references.py` splits a pasted list into references (blank lines, numbering, hanging indents or one per line) and reads the DOI, authors, year, title and journal where it recognises APA, Harvard, Chicago author-date, MLA or Vancouver layout. It leaves out any field it cannot read rather than guessing, and every card has a "How this was read" panel. Unusual layouts, corporate authors and chapters can be misread. Google Scholar's *Cite* box usually gives no DOI, and CiteProof can only look a reference up by DOI, so those references get no verdict.
+- **Initials and shortened author lists count as differences.** CiteProof compares given names letter for letter, so APA's "McKinney, W." differs from a catalogue's "McKinney, Wes", and "et al." or "…" gives a shorter list. That is CiteProof's rule and the demo does not change it; the card notes when family names match.
+- **Formats.** References: pasted text, BibTeX or CiteProof JSON. Catalogue: CiteProof's JSON, or CSV. **CSV is a convenience of this demo, not a CiteProof format**; it is converted to CiteProof's records by `docs/py/demo_logic.py` (a blank `retracted` cell becomes "not supplied", not "false"). Rows with no DOI are skipped and counted.
 - **BibTeX has no citation list.** Every entry is treated as cited, as in `citeproof from-bibtex`, so `UNCITED_REFERENCE` and `MISSING_REFERENCE` can only appear with JSON that has a `"citations"` list.
 - **Size.** Up to 300,000 characters of references (500 references), and a catalogue of up to 8 MB / 50,000 records. The work runs on the page's main thread, so very large inputs can make the tab unresponsive.
 - **The sample catalogue is tiny** (7 records) so that most real references will get no verdict. It exists so the demo works out of the box.
@@ -42,7 +46,7 @@ The page has a "What this does not check" panel. In short: it does not decide wh
 
 A record is marked `"retracted": false` only because its DOI is **not listed** in that dataset on that date. The provenance text says so.
 
-`sample-references-good.bib`, `sample-references-messy.bib` and `sample-references.json` are generated from the catalogue by `scripts/build_sample_references.py`. Each defect in the messy list is labelled. One entry, `invented2026`, is invented for the demo.
+`sample-references-text.txt`, `sample-references-good.bib`, `sample-references-messy.bib` and `sample-references.json` are generated from the catalogue by `scripts/build_sample_references.py`. Each defect in the messy list is labelled. One entry, `invented2026`, is invented for the demo.
 
 ## Run it locally
 
@@ -65,7 +69,7 @@ ruff check . && ruff format --check . && pytest -q
 
 `pytest` runs CiteProof's own tests plus `tests/test_demo_logic.py`, which covers the demo's data handling and proves `docs/py/citeproof` is byte-identical to `src/citeproof`. CI runs these.
 
-The headless-browser tests (`tests/browser`) load the page in Chromium and cover a good list, a messy list, an empty input, privacy (every request audited), a CDN failure, a tampered Pyodide file, catalogue upload, CSV export, the Crossref flows, keyboard-only use, a phone width and dark mode. They skip unless Playwright and Chromium are installed.
+The headless-browser tests (`tests/browser`) load the page in Chromium and cover a good list, a messy list, pasted text, an empty input, privacy (every request audited), a CDN failure, a tampered Pyodide file, catalogue upload, CSV export, the Crossref flows, keyboard-only use, a phone width and dark mode. They skip unless Playwright and Chromium are installed.
 
 ```bash
 pip install playwright               # use an installed Chromium, or: playwright install chromium

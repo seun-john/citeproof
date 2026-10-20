@@ -21,13 +21,16 @@ import io
 import json
 import re
 import sys
+from difflib import SequenceMatcher
 from typing import Any
 from urllib.parse import quote
 
+from text_references import parse_text_references
+
 from citeproof import __version__ as CITEPROOF_VERSION
 from citeproof.bibtex import parse_bibtex
-from citeproof.core import InputError
-from citeproof.references import citeproof, normalise_doi
+from citeproof.core import InputError, norm
+from citeproof.references import TITLE_NEAR, citeproof, normalise_doi
 
 MAX_INPUT_CHARS = 300_000
 MAX_CATALOGUE_CHARS = 8_000_000
@@ -71,6 +74,7 @@ CSV_COLUMNS = [
     "person_decision",
 ]
 CATALOGUE_FIELDS = ("doi", "title", "authors", "year", "journal", "retracted", "provenance")
+NUMBERED_LIST = re.compile(r"^\[\s*\d{1,3}\s*\]")
 TRUE_WORDS = {"true", "yes", "y", "1"}
 FALSE_WORDS = {"false", "no", "n", "0"}
 
@@ -189,7 +193,8 @@ def parse_references(text: str) -> dict[str, Any]:
         raise DemoError(
             "Nothing to check yet",
             "The reference box is empty.",
-            "Paste a BibTeX list or CiteProof JSON, or press one of the sample buttons.",
+            "Paste your reference list (copied from a document, Google Scholar or a reference "
+            "manager), or press one of the sample buttons.",
         )
     if len(stripped) > MAX_INPUT_CHARS:
         raise DemoError(
@@ -198,7 +203,7 @@ def parse_references(text: str) -> dict[str, Any]:
             "Check a smaller batch, or run CiteProof on your own computer.",
         )
     notices: list[str] = []
-    if stripped[0] in "{[":
+    if stripped[0] == "{" or (stripped[0] == "[" and not NUMBERED_LIST.match(stripped)):
         data = _load_json(stripped, "your reference list")
         if isinstance(data, list):
             data = {"references": data}
@@ -226,25 +231,20 @@ def parse_references(text: str) -> dict[str, Any]:
                 "A field value opens with a quote mark that never closes.",
                 "Check the quote marks and braces in your entries.",
             ) from exc
-        if not entries:
-            raise DemoError(
-                "No BibTeX entries found",
-                "This demo reads BibTeX (entries that start like @article{key, ...) or CiteProof "
-                "JSON. It cannot read a formatted reference list such as APA text.",
-                "Most reference managers can export BibTeX: Zotero, Mendeley, Overleaf and "
-                "Google Scholar all can.",
+        if entries:
+            parsed = {
+                "format": "bibtex",
+                "references": entries,
+                "citations": [r["id"] for r in entries],
+                "catalogue": None,
+            }
+            notices.append(
+                "BibTeX input: every entry is treated as cited, exactly as CiteProof's "
+                "from-bibtex does, so the uncited and missing-reference checks cannot trigger. "
+                'Use JSON with a "citations" list to use them.'
             )
-        parsed = {
-            "format": "bibtex",
-            "references": entries,
-            "citations": [r["id"] for r in entries],
-            "catalogue": None,
-        }
-        notices.append(
-            "BibTeX input: every entry is treated as cited, exactly as CiteProof's from-bibtex "
-            "does, so the uncited and missing-reference checks cannot trigger. Use JSON with a "
-            '"citations" list to use them.'
-        )
+        else:
+            parsed = _read_plain_text(stripped, notices)
     if isinstance(parsed["references"], list) and len(parsed["references"]) > MAX_REFERENCES:
         raise DemoError(
             "Too many references for this demo",
@@ -253,6 +253,39 @@ def parse_references(text: str) -> dict[str, Any]:
         )
     parsed["notices"] = notices
     return parsed
+
+
+def _read_plain_text(text: str, notices: list[str]) -> dict[str, Any]:
+    found = parse_text_references(text)
+    if not found["references"]:
+        raise DemoError(
+            "No references found in that text",
+            "No line looked like a reference: none had a DOI or a year.",
+            "Paste one reference per line or paragraph (for example from your reference list "
+            "or from Google Scholar's Cite box), or use BibTeX or CiteProof JSON.",
+        )
+    ids = [r["id"] for r in found["references"]]
+    notices.append(
+        f"Plain text: found {len(ids)} reference(s). The demo's own reader split the text and "
+        "picked out the DOI, authors, year, title and journal where the layout was "
+        "recognised (APA, Harvard, Chicago, MLA, Vancouver). This reader is not part of "
+        'CiteProof and is best effort: open "How this was read" on a card to see what '
+        "it took from your text. Anything it could not read is left out, not guessed, and "
+        "CiteProof then reports it as missing. Every entry is treated as cited."
+    )
+    if found["skipped"]:
+        shown = "; ".join(f"\u201c{t[:60]}\u201d" for t in found["skipped"][:3])
+        notices.append(
+            f"{len(found['skipped'])} line(s) were skipped because they have no DOI and no year, "
+            f"so they do not look like references: {shown}"
+        )
+    return {
+        "format": "text",
+        "references": found["references"],
+        "citations": ids,
+        "catalogue": None,
+        "read": found["read"],
+    }
 
 
 def _retracted_cell(value: str, row: int) -> bool | None:
@@ -378,18 +411,60 @@ def _show(value: Any, limit: int = 4) -> str:
     return str(value)
 
 
+def _clean_name(name: Any) -> str:
+    return str(name).strip()
+
+
+def _surname(name: Any) -> str:
+    text = _clean_name(name)
+    if "," in text:
+        return norm(text.split(",", 1)[0])
+    return norm(text.split()[-1]) if text.split() else ""
+
+
+def _author_hint(mine: Any, theirs: Any) -> str:
+    """Why 'different authors' may only mean the names are written differently."""
+    if not isinstance(mine, list) or not isinstance(theirs, list):
+        return ""
+    cut = any(re.search(r"et al|\u2026|\.\.\.", str(a)) for a in mine)
+    if len(mine) != len(theirs):
+        text = f"Your list has {len(mine)} author(s) and the catalogue has {len(theirs)}."
+        if cut or len(mine) < len(theirs):
+            text += (
+                " CiteProof compares whole lists, so a shortened list (\u201cet al.\u201d, "
+                "\u201c\u2026\u201d) counts as a difference."
+            )
+        return text
+    if [_surname(a) for a in mine] == [_surname(a) for a in theirs]:
+        return (
+            "The family names match in the same order. CiteProof compares given names letter "
+            "for letter, so initials (\u201cMcKinney, W.\u201d) differ from full names "
+            "(\u201cMcKinney, Wes\u201d)."
+        )
+    return ""
+
+
 def _difference_lines(
-    differences: dict[str, Any], ref: dict[str, Any], record: dict[str, Any]
+    differences: dict[str, Any],
+    ref: dict[str, Any],
+    record: dict[str, Any],
+    from_text: bool = False,
 ) -> list[dict[str, str]]:
     lines = []
     for field, diff in differences.items():
         if diff.get("reason") == "missing metadata":
-            gaps = [
-                side
-                for side, source in (("your reference", ref), ("the catalogue record", record))
-                if field not in source
-            ]
-            value = f"{field} is missing from {' and '.join(gaps)}, so it could not be compared."
+            gaps = []
+            for side, source in (("your reference", ref), ("the catalogue record", record)):
+                if field in source:
+                    continue
+                gaps.append("your pasted text" if from_text and side == "your reference" else side)
+            where = " and ".join(gaps)
+            tail = (
+                "it could not be read from there, so it was not compared."
+                if "your pasted text" in gaps
+                else "so it could not be compared."
+            )
+            value = f"{field} is missing from {where}; {tail}"
         else:
             mine, theirs = _show(diff["reference"]), _show(diff["catalogue"])
             value = f"you wrote {mine!r}; the catalogue has {theirs!r}"
@@ -397,8 +472,46 @@ def _difference_lines(
                 value += f" (title similarity {diff['similarity']})"
             if "note" in diff:
                 value += f" - CiteProof: {diff['note']}"
+            if field == "authors" and diff.get("note") == "different authors":
+                hint = _author_hint(diff["reference"], diff["catalogue"])
+                if hint:
+                    value += f". Note: {hint}"
         lines.append({"label": f"Difference in {field}", "value": value})
     return lines
+
+
+def _title_hints(text: str, records: list[dict[str, Any]], contained: bool) -> list[dict[str, Any]]:
+    """Catalogue records whose title is in `text`. Advisory only: CiteProof matches by DOI."""
+    wanted, found = norm(text), []
+    for record in records:
+        title = norm(record.get("title", ""))
+        if len(title) < 20 or not wanted:
+            continue
+        if contained:
+            same = title in wanted
+        else:
+            same = SequenceMatcher(None, wanted, title).ratio() >= TITLE_NEAR
+        if same:
+            found.append(record)
+    return found[:3]
+
+
+def _read_view(info: dict[str, Any] | None, ref: dict[str, Any]) -> dict[str, Any] | None:
+    """What the plain-text reader took from a pasted reference (None for BibTeX and JSON)."""
+    if not info:
+        return None
+    labels = (
+        ("doi", "DOI"),
+        ("authors", "Authors"),
+        ("year", "Year"),
+        ("title", "Title"),
+        ("journal", "Journal"),
+    )
+    fields = [
+        {"label": label, "value": _show(ref[key], limit=6) if key in ref else "not read"}
+        for key, label in labels
+    ]
+    return {"raw": info["raw"], "style": info["style"], "fields": fields}
 
 
 def _flag_note(flag: dict[str, Any]) -> str:
@@ -432,6 +545,7 @@ def build_result(
     by_doi = {normalise_doi(r["doi"]): r for r in records}
     findings = report["findings"]
     refs: list[dict[str, Any]] = parsed["references"]
+    read_info: dict[str, Any] = parsed.get("read") or {}
     rows: list[dict[str, Any]] = []
     counts = {"verified": 0, "metadata_mismatch": 0, "no_verdict": 0}
     flags_count = {
@@ -461,7 +575,9 @@ def build_result(
         elif verdict == "METADATA_MISMATCH":
             headline = HEADLINES["METADATA_MISMATCH"]
             evidence.append({"label": "Matched by DOI", "value": doi})
-            evidence += _difference_lines(comparison["evidence"]["differences"], ref, record or {})
+            evidence += _difference_lines(
+                comparison["evidence"]["differences"], ref, record or {}, ref["id"] in read_info
+            )
         elif doi:
             headline = HEADLINES["NEEDS_REVIEW_NOT_FOUND"]
             evidence.append({"label": "DOI looked up", "value": doi})
@@ -483,6 +599,24 @@ def build_result(
                     "value": "not searched (CiteProof looks records up by DOI)",
                 }
             )
+        if verdict == "NEEDS_REVIEW":
+            raw = read_info.get(ref["id"], {}).get("raw")
+            text = raw if raw else str(ref.get("title", ""))
+            other = (
+                " Your reference gives a different DOI." if normalise_doi(ref.get("doi")) else ""
+            )
+            for hit in _title_hints(text, records, contained=bool(raw)):
+                evidence.append(
+                    {
+                        "label": "Possible match by title (advisory)",
+                        "value": (
+                            f"The catalogue record \u201c{hit.get('title')}\u201d "
+                            f"(DOI {hit.get('doi')}, {hit.get('year', 'year not given')}) has this "
+                            f"title.{other} CiteProof matches by DOI only, so this did not change "
+                            "the verdict. A person should check whether it is the same work."
+                        ),
+                    }
+                )
         if record is not None:
             evidence.append(
                 {
@@ -514,6 +648,7 @@ def build_result(
                 "evidence": evidence,
                 "flags": row_flags,
                 "person_note": PERSON_NOTE,
+                "read": _read_view(read_info.get(ref["id"]), ref),
                 "from_crossref": bool(
                     record and str(record.get("provenance", "")).startswith("Crossref REST API")
                 ),

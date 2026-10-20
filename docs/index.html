@@ -53,16 +53,11 @@
 
     <section class="panel" aria-labelledby="step1-h">
       <h2 id="step1-h"><span class="step">1</span> Your references</h2>
-      <p id="refs-help" class="help">Paste <strong>BibTeX</strong> (entries that start like <code>@article{key, &hellip;</code>) or <strong>CiteProof JSON</strong>. Zotero, Mendeley, Overleaf and Google Scholar can all export BibTeX. Formatted text such as APA lists cannot be read.</p>
+      <p id="refs-help" class="help">Paste your reference list as it appears in your document or in Google Scholar's <em>Cite</em> box: one reference per line or paragraph, in APA, Harvard, Chicago, MLA or Vancouver layout. BibTeX and CiteProof JSON work too. Plain text is read on a best-effort basis (this page's own reader, not CiteProof): each result shows how your text was read. References with a DOI are checked best; most pasted citations from Google Scholar have none.</p>
       <label for="refs" class="visually-hidden">Reference list</label>
-      <textarea id="refs" name="refs" rows="12" spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="refs-help" placeholder="@article{smith2020,
-  author = {Smith, Jane and Doe, Alex},
-  title = {A study of things},
-  journal = {Journal of Things},
-  year = {2020},
-  doi = {10.1234/example}
-}"></textarea>
+      <textarea id="refs" name="refs" rows="12" spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="refs-help" placeholder="Smith, J., &amp; Doe, A. (2020). A study of things. Journal of Things, 4(2), 1-10. https://doi.org/10.1234/example"></textarea>
       <div class="row" role="group" aria-label="Load an example list">
+        <button type="button" class="btn secondary" data-sample="data/sample-references-text.txt">Load the pasted-text example</button>
         <button type="button" class="btn secondary" data-sample="data/sample-references-good.bib">Load the good example</button>
         <button type="button" class="btn secondary" data-sample="data/sample-references-messy.bib">Load the messy example</button>
         <button type="button" class="btn secondary" data-sample="data/sample-references.json">Load the JSON example</button>
@@ -141,6 +136,7 @@
     <ul>
       <li><strong>Whether a reference exists in the real world.</strong> CiteProof only compares with the catalogue you chose. A reference that is &ldquo;not found in this catalogue&rdquo; may be perfectly real; the sample catalogue holds seven records.</li>
       <li><strong>Whether a source supports what your text says.</strong> A reference can match a real record and still be cited for the wrong reason. This demo never judges support. (CiteProof has a separate <code>claims</code> command that lines claims up with source passages for a person to read. It never marks a claim as supported, and it is not part of this demo.)</li>
+      <li><strong>Formatted text, read perfectly.</strong> CiteProof itself reads only BibTeX or JSON. This page adds its own best-effort reader for pasted text; it can misread unusual layouts, and it never guesses a field it cannot read. A reference with no DOI cannot be looked up, so it gets no verdict.</li>
       <li><strong>Your writing.</strong> It does not read your essay or paper, so it cannot tell whether a citation in your text appears in your list. With BibTeX, every entry counts as cited.</li>
       <li><strong>Whether a source is good.</strong> Quality, peer review, relevance and bias are not looked at.</li>
       <li><strong>Who wrote your text.</strong> It is not an AI-writing or plagiarism detector.</li>

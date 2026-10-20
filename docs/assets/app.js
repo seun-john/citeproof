@@ -8,7 +8,7 @@ const PYODIDE_BASE = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/
 const PYODIDE_SRI = "sha384-VR47TfKeAmT7vMej7bwOVg0tHTQLLGMSIpsXtFMCZG5OpKZSIXoSLtGY//qHcxc6";
 const PY_FILES = [
   "citeproof/__init__.py", "citeproof/core.py", "citeproof/references.py",
-  "citeproof/bibtex.py", "citeproof/claims.py", "demo_logic.py",
+  "citeproof/bibtex.py", "citeproof/claims.py", "demo_logic.py", "text_references.py",
 ];
 const MAX_CATALOGUE_BYTES = 8 * 1000 * 1000;
 const LOOKUP_GAP_MS = 400;
@@ -193,9 +193,18 @@ function renderRow(row) {
       h("p", { class: "headline", text: row.headline }),
       h("p", { class: "says" }, h("span", { class: "label", text: "CiteProof says: " }), `“${row.message}”`),
       h("dl", { class: "evidence" }, row.evidence.map((e) => [h("dt", { text: e.label }), h("dd", { text: e.value })])),
+      row.read ? renderRead(row.read) : null,
       row.flags.length ? h("ul", { class: "flag-list" }, row.flags.map((f) => h("li", {},
         h("strong", { text: `${f.status}: ` }), `“${f.message}”`, f.note ? ` ${f.note}` : ""))) : null,
       h("p", { class: "person", text: row.person_note })));
+}
+
+function renderRead(read) {
+  return h("details", { class: "read" },
+    h("summary", { text: "How this was read" }),
+    h("p", { class: "help" }, "Your text: ", h("q", { text: read.raw })),
+    h("p", { class: "help", text: `Layout recognised: ${read.style}. This reading is the demo's own, not CiteProof's. If a field is wrong or missing, fix the text and check again.` }),
+    h("dl", { class: "evidence" }, read.fields.map((f) => [h("dt", { text: f.label }), h("dd", { text: f.value })])));
 }
 
 function renderMissing(item) {
@@ -224,7 +233,7 @@ function renderResult(result) {
   const s = result.summary;
   const body = $("results-body");
   const kids = [
-    h("p", { class: "meta", text: `Checked ${s.total} reference${s.total === 1 ? "" : "s"} (${result.input_format === "bibtex" ? "BibTeX" : "JSON"}) against ${result.catalogue_label} — ${result.catalogue_size} records — with CiteProof ${result.citeproof_version}.` }),
+    h("p", { class: "meta", text: `Checked ${s.total} reference${s.total === 1 ? "" : "s"} (${{ bibtex: "BibTeX", json: "JSON", text: "plain text" }[result.input_format]}) against ${result.catalogue_label} — ${result.catalogue_size} records — with CiteProof ${result.citeproof_version}.` }),
     h("p", { class: "standing", text: "These are comparisons with one catalogue, not judgements. A person must decide what each result means." }),
     h("p", { class: "summary-line", text: `Of ${s.total} reference${s.total === 1 ? "" : "s"}: ${s.verified.count} verified (${s.verified.percent}%) \u00b7 ${s.metadata_mismatch.count} metadata mismatch (${s.metadata_mismatch.percent}%) \u00b7 ${s.no_verdict.count} no verdict (${s.no_verdict.percent}%).` }),
     ...result.notices.map((n) => h("p", { class: "notice", text: n })),

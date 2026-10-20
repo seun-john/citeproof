@@ -136,6 +136,38 @@ def main() -> int:
     messy += bibtex("mckinney2010b", fields(by_key["pandas"]))
     (DATA / "sample-references-messy.bib").write_text(messy, encoding="utf-8")
 
+    pandas, seaborn, skimage = by_key["pandas"], by_key["seaborn"], by_key["skimage"]
+    text = "References\n"
+    text += (
+        f"McKinney, W. ({pandas['year']}). Data structures for statistical computing in Python. "
+        f"{pandas['journal']}, 56\u201361. https://doi.org/{pandas['doi']}\n"
+    )
+    text += (
+        "Harris, C. R., Millman, K. J., van der Walt, S. J., Gommers, R., \u2026 & Oliphant, T. E. "
+        f"(2020). {by_key['numpy']['title']}. Nature, 585(7825), 357\u2013362.\n"
+    )
+    text += (
+        f"Waskom, Michael L. \u201c{seaborn['title'].capitalize()}.\u201d {seaborn['journal']}, "
+        "vol. 6, no. 60, 2021, p. 3021.\n"
+    )
+    text += (
+        "Pedregosa F, Varoquaux G, Gramfort A, Michel V. Scikit-learn: machine learning in "
+        "Python. J Mach Learn Res. 2011;12:2825-30.\n"
+    )
+    text += (
+        "Wilkinson, M. D., Dumontier, M., Aalbersberg, I. J., et al. (2016). The FAIR Guiding "
+        "Principles for scientific data management and stewardship. Scientific Data, 3, 160018. "
+        "https://doi.org/10.1038/sdata.2016.18\n"
+    )
+    text += "my notes: still need to find the source for the 2019 survey figure\n"
+    text += (
+        "Van der Walt, S., Sch\u00f6nberger, J. L., Nunez-Iglesias, J., Boulogne, F., "
+        "Warner, J. D., Yager, N., \u2026 & Yu, T. "
+        f"({skimage['year']}). {skimage['title']}. {skimage['journal']}, "
+        f"2, e453. https://doi.org/{skimage['doi']}\n"
+    )
+    (DATA / "sample-references-text.txt").write_text(text, encoding="utf-8")
+
     example_json = {
         "references": [
             {
@@ -167,7 +199,7 @@ def main() -> int:
     }
     text = json.dumps(example_json, indent=2, ensure_ascii=False) + "\n"
     (DATA / "sample-references.json").write_text(text, encoding="utf-8")
-    print("Wrote 3 example files to docs/data/")
+    print("Wrote 4 example files to docs/data/")
     return 0
 
 

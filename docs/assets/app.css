@@ -203,6 +203,8 @@ summary { cursor: pointer; min-height: 44px; display: flex; align-items: center;
 .evidence dt { color: var(--muted); font-weight: 600; }
 .evidence dd { margin: 0; overflow-wrap: anywhere; }
 .flag-list { list-style: none; padding: 0; margin: 0.5rem 0; display: grid; gap: 0.4rem; }
+.read { margin: 0.4rem 0; }
+.read q { font-style: normal; overflow-wrap: anywhere; }
 .person { margin: 0.5rem 0 0; font-size: 0.92rem; color: var(--muted); }
 
 .lookup { border: 2px dashed var(--accent); border-radius: var(--radius); padding: 0.9rem 1rem; margin: 1rem 0; background: var(--surface); }

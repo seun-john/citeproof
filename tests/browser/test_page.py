@@ -95,7 +95,7 @@ def test_empty_input(open_page: Any, shot: Any) -> None:
     s.check("")
     alert = s.page.locator("#results-body [role=alert]")
     expect(alert).to_contain_text("Nothing to check yet")
-    expect(alert).to_contain_text("Paste a BibTeX list")
+    expect(alert).to_contain_text("Paste your reference list")
     assert s.page.locator(".tile").count() == 0  # no 0% / NaN summary for nothing
     s.check("   \n  ")
     expect(alert).to_contain_text("Nothing to check yet")
@@ -103,10 +103,35 @@ def test_empty_input(open_page: Any, shot: Any) -> None:
     shot(s.page, "empty-input-desktop-light")
 
 
-def test_plain_text_list_is_explained(open_page: Any) -> None:
+def test_pasted_text_example(open_page: Any, shot: Any) -> None:
     s = open_page()
-    s.check("Smith, J. (2020). A study of things. Journal of Things, 4(2), 1-10.")
-    expect(s.page.locator("#results-body [role=alert]")).to_contain_text("No BibTeX entries found")
+    load_sample(s, "sample-references-text.txt")
+    s.check()
+    page = s.page
+    expect(page.locator(".tile.verified .big")).to_have_text("0 of 7")
+    expect(page.locator(".tile.metadata_mismatch .big")).to_have_text("2 of 7")
+    expect(page.locator(".tile.no_verdict .big")).to_have_text("5 of 7")
+    text = results_text(s)
+    assert "(plain text)" in text and "not part of CiteProof" in text
+    assert text.count("Possible match by title (advisory)") == 2
+    assert "did not change the verdict" in text
+    assert "initials" in text and "shortened list" in text
+    reads = page.locator("details.read")
+    assert reads.count() == 7
+    reads.first.locator("summary").click()
+    expect(reads.first).to_contain_text("McKinney, W. (2010)")
+    expect(reads.first).to_contain_text("Layout recognised: APA or Harvard")
+    expect(reads.first).to_contain_text("10.25080/Majora-92bf1922-00a")
+    assert s.errors == []
+    shot(page, "pasted-text-desktop-light")
+
+
+def test_text_that_is_not_references_is_explained(open_page: Any) -> None:
+    s = open_page()
+    s.check("hello, this is not a reference list at all")
+    alert = s.page.locator("#results-body [role=alert]")
+    expect(alert).to_contain_text("No references found in that text")
+    expect(alert).to_contain_text("one reference per line")
 
 
 # ----------------------------------------------------------------------- privacy

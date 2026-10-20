@@ -13,12 +13,14 @@ from typing import Any
 
 import demo_logic as demo
 import pytest
+import text_references
 
 from citeproof.references import citeproof
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "docs" / "data"
 CATALOGUE = json.loads((DATA / "sample-catalogue.json").read_text(encoding="utf-8"))
+TEXT = (DATA / "sample-references-text.txt").read_text(encoding="utf-8")
 GOOD = (DATA / "sample-references-good.bib").read_text(encoding="utf-8")
 MESSY = (DATA / "sample-references-messy.bib").read_text(encoding="utf-8")
 JSON_EXAMPLE = (DATA / "sample-references.json").read_text(encoding="utf-8")
@@ -215,13 +217,6 @@ def test_empty_and_whitespace_input_gives_a_readable_error() -> None:
         with pytest.raises(demo.DemoError) as caught:
             check(text)
         assert caught.value.title == "Nothing to check yet"
-
-
-def test_plain_text_reference_list_is_explained_not_guessed() -> None:
-    with pytest.raises(demo.DemoError) as caught:
-        check("Smith, J. (2020). A study of things. Journal of Things, 4(2), 1-10.")
-    assert caught.value.title == "No BibTeX entries found"
-    assert "BibTeX" in caught.value.hint
 
 
 def test_bibtex_treats_every_entry_as_cited_and_says_so() -> None:
@@ -529,3 +524,188 @@ def test_bridge_returns_json_and_never_raises() -> None:
     assert weird["ok"] is False and weird["error"]["title"]
     assert json.loads(demo.api_parse_catalogue("doi\n10.1/x\n", "c.csv"))["ok"] is True
     assert "csv" in json.loads(demo.api_csv(json.dumps(ok)))
+
+
+# ---------------------------------------------------------------- pasted plain text
+
+
+def read(raw: str) -> dict[str, Any]:
+    return text_references.read_entry(raw)["fields"]
+
+
+MCKINNEY_APA = (
+    "McKinney, W. (2010). Data structures for statistical computing in Python. Proceedings of the "
+    "9th Python in Science Conference, 56\u201361. https://doi.org/10.25080/Majora-92bf1922-00a"
+)
+WASKOM = {
+    "apa": "Waskom, M. L. (2021). seaborn: statistical data visualization. Journal of Open Source "
+    "Software, 6(60), 3021.",
+    "harvard": "Waskom, M.L. (2021) 'seaborn: statistical data visualization', Journal of Open "
+    "Source Software, 6(60), p. 3021.",
+    "chicago": "Waskom, Michael L. 2021. \u201cSeaborn: Statistical Data Visualization.\u201d "
+    "Journal of Open Source Software 6 (60): 3021.",
+    "mla": "Waskom, Michael L. \u201cSeaborn: Statistical Data Visualization.\u201d Journal of "
+    "Open Source Software, vol. 6, no. 60, 2021, p. 3021.",
+}
+
+
+@pytest.mark.parametrize("style", list(WASKOM))
+def test_each_citation_style_gives_title_journal_and_year(style: str) -> None:
+    fields = read(WASKOM[style])
+    assert fields["title"].lower() == "seaborn: statistical data visualization"
+    assert fields["journal"] == "Journal of Open Source Software"
+    assert fields["year"] == "2021"
+    assert fields["authors"][0].startswith("Waskom")
+
+
+def test_vancouver_and_apa_multi_author_lists() -> None:
+    van = read(
+        "Pedregosa F, Varoquaux G, Gramfort A, Michel V. Scikit-learn: machine learning in "
+        "Python. J Mach Learn Res. 2011;12:2825-30."
+    )
+    assert van["authors"] == ["Pedregosa F", "Varoquaux G", "Gramfort A", "Michel V"]
+    assert (van["journal"], van["year"]) == ("J Mach Learn Res", "2011")
+    apa = read(
+        "Pedregosa, F., Varoquaux, G., Gramfort, A., & Michel, V. (2011). Scikit-learn: Machine "
+        "learning in Python. Journal of Machine Learning Research, 12, 2825\u20132830."
+    )
+    assert apa["authors"] == ["Pedregosa, F.", "Varoquaux, G.", "Gramfort, A.", "Michel, V."]
+    assert apa["journal"] == "Journal of Machine Learning Research"
+
+
+def test_doi_is_found_in_every_common_form() -> None:
+    base = "Smith, J. (2020). A study of things. Journal of Things, 4, 1-10."
+    for tail in (
+        "https://doi.org/10.1234/Abc.5.",
+        "doi:10.1234/Abc.5",
+        "DOI: 10.1234/Abc.5",
+        "http://dx.doi.org/10.1234/Abc.5)",
+    ):
+        assert read(f"{base} {tail}")["doi"] == "10.1234/Abc.5"
+    parens = read("Smith (1997). T. J. 1. 10.1016/S0140-6736(97)11096-0.")
+    assert parens["doi"] == "10.1016/S0140-6736(97)11096-0"
+
+
+def test_unrecognised_layouts_are_left_unread_not_guessed() -> None:
+    fields = read("I think this was the one from last week maybe 2019 something")
+    assert fields == {}
+
+
+ONE = "One, A. (2020). A title here that is long. J, 1, 1-2."
+TWO = "Two, B. (2021). Another title here. K, 2, 3-4."
+
+
+@pytest.mark.parametrize(
+    ("pasted", "count"),
+    [
+        (f"{ONE}\n\n{TWO}", 2),
+        (f"[1] {ONE}\n[2] {TWO}", 2),
+        (f"1. {ONE}\n2. {TWO}", 2),
+        (f"{ONE.replace('J, 1,', 'J, 1,')}\n   more\n{TWO}", 2),
+        (f"{ONE}\n{TWO}", 2),
+        ("One, A. (2020). A title here that is\nlong and wraps. J, 1.", 1),
+        (f"References\n{ONE}\n{TWO}\nnotes to self about the list", 2),
+        ("One, A. (2020). A title here that is long. Journal of\nThings, 1, 1-2.\n" + TWO, 2),
+    ],
+)
+def test_list_layouts_are_split_into_references(pasted: str, count: int) -> None:
+    assert len(demo.parse_references(pasted)["references"]) == count
+
+
+def test_numbered_list_starting_with_a_bracket_is_not_mistaken_for_json() -> None:
+    parsed = demo.parse_references("[1] One, A. (2020). A title here that is long. J, 1, 1-2.")
+    assert parsed["format"] == "text"
+
+
+def test_text_without_any_reference_is_explained() -> None:
+    with pytest.raises(demo.DemoError) as caught:
+        check("just some words here that are not a reference at all")
+    assert caught.value.title == "No references found in that text"
+    assert "one reference per line" in caught.value.hint
+
+
+def test_headings_and_non_references_are_skipped_and_reported() -> None:
+    parsed = demo.parse_references(f"References\n{ONE}\n{TWO}\nmy notes to self about this")
+    assert [r["id"] for r in parsed["references"]] == ["ref1", "ref2"]
+    assert any("1 line(s) were skipped" in n for n in parsed["notices"])
+
+
+def test_text_with_a_matching_doi_and_full_names_can_be_verified() -> None:
+    chicago = (
+        "McKinney, Wes. 2010. \u201cData Structures for Statistical Computing in Python.\u201d "
+        "Proceedings of the 9th Python in Science Conference 445: 56\u201361. "
+        "https://doi.org/10.25080/Majora-92bf1922-00a"
+    )
+    result = check(chicago, CATALOGUE)
+    assert result["rows"][0]["verdict"] == "VERIFIED"
+    assert result["input_format"] == "text"
+
+
+def test_initials_are_a_citeproof_mismatch_and_the_card_says_why() -> None:
+    row = check(MCKINNEY_APA, CATALOGUE)["rows"][0]
+    assert row["verdict"] == "METADATA_MISMATCH"
+    line = next(e["value"] for e in row["evidence"] if e["label"] == "Difference in authors")
+    assert "CiteProof: different authors" in line
+    assert "family names match" in line and "initials" in line
+
+
+def test_shortened_author_lists_are_explained() -> None:
+    row = check(TEXT, CATALOGUE)["rows"][-1]
+    line = next(e["value"] for e in row["evidence"] if e["label"] == "Difference in authors")
+    assert "shortened list" in line
+
+
+def test_a_missing_field_from_text_says_it_was_not_read() -> None:
+    record = {**REC, "doi": "10.1234/x"}
+    row = check("Smith. (2020). x. https://doi.org/10.1234/x", [record])["rows"][0]
+    lines = {e["label"]: e["value"] for e in row["evidence"]}
+    assert "could not be read from there" in lines["Difference in journal"]
+    assert "your pasted text" in lines["Difference in journal"]
+
+
+def test_text_example_verdicts_and_how_it_was_read() -> None:
+    result = check(TEXT, CATALOGUE)
+    assert {r["id"]: r["verdict"] for r in result["rows"]} == {
+        "ref1": "METADATA_MISMATCH",
+        "ref2": "NEEDS_REVIEW",
+        "ref3": "NEEDS_REVIEW",
+        "ref4": "NEEDS_REVIEW",
+        "ref5": "NEEDS_REVIEW",
+        "ref6": "NEEDS_REVIEW",
+        "ref7": "METADATA_MISMATCH",
+    }
+    assert result["summary"]["verified"]["count"] == 0
+    assert all(r["read"] and r["read"]["raw"] for r in result["rows"])
+    assert check(BIB, [REC])["rows"][0]["read"] is None  # BibTeX has no "how this was read"
+    assert result["rows"][5]["read"]["style"] == "not recognised"
+
+
+def test_title_hint_is_advisory_and_never_changes_the_verdict() -> None:
+    rows = {r["id"]: r for r in check(TEXT, CATALOGUE)["rows"]}
+    for ref_id, title in (("ref2", "Array programming with NumPy"), ("ref3", "seaborn")):
+        hint = next(e for e in rows[ref_id]["evidence"] if "advisory" in e["label"])
+        assert title in hint["value"] and "did not change the verdict" in hint["value"]
+        assert rows[ref_id]["verdict"] == "NEEDS_REVIEW"
+    assert not any("advisory" in e["label"] for e in rows["ref4"]["evidence"])
+    assert not any("advisory" in e["label"] for e in rows["ref5"]["evidence"])
+
+
+def test_title_hint_for_bibtex_with_a_wrong_doi_says_so() -> None:
+    long_title = {**REC, "title": "A Study of Things That Matter Greatly"}
+    wrong = BIB.replace("A Study of Things", long_title["title"]).replace("10.1/x", "10.9/other")
+    row = check(wrong, [long_title])["rows"][0]
+    hint = next(e for e in row["evidence"] if "advisory" in e["label"])
+    assert "different DOI" in hint["value"]
+
+
+def test_text_input_is_cited_note_and_never_says_verified_without_citeproof() -> None:
+    result = check(TEXT, CATALOGUE)
+    direct = citeproof(
+        {
+            "references": [{"id": r["id"], **(r["read"] and {})} for r in result["rows"]][:0],
+            "catalogue": CATALOGUE,
+            "citations": [],
+        }
+    )
+    assert direct["findings"] == []  # sanity: building blocks are CiteProof's own
+    assert any("Plain text" in n and "not part of CiteProof" in n for n in result["notices"])
