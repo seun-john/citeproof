@@ -1,0 +1,531 @@
+"""Tests for the browser demo's data handling (docs/py/demo_logic.py) and its shipped data."""
+
+from __future__ import annotations
+
+import csv
+import io
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import demo_logic as demo
+import pytest
+
+from citeproof.references import citeproof
+
+ROOT = Path(__file__).resolve().parent.parent
+DATA = ROOT / "docs" / "data"
+CATALOGUE = json.loads((DATA / "sample-catalogue.json").read_text(encoding="utf-8"))
+GOOD = (DATA / "sample-references-good.bib").read_text(encoding="utf-8")
+MESSY = (DATA / "sample-references-messy.bib").read_text(encoding="utf-8")
+JSON_EXAMPLE = (DATA / "sample-references.json").read_text(encoding="utf-8")
+
+BIB = """@article{a1,
+  author = {Lovelace, Ada and Turing, Alan},
+  title = {A Study of Things},
+  journal = {J Things},
+  year = {2020},
+  doi = {10.1/x}
+}
+"""
+REC = {
+    "doi": "10.1/x",
+    "title": "A Study of Things",
+    "authors": ["Ada Lovelace", "Alan Turing"],
+    "year": 2020,
+    "journal": "J Things",
+    "retracted": False,
+    "provenance": "test",
+}
+
+
+def check(text: str, records: list[dict[str, Any]] | None = None, **kw: Any) -> dict[str, Any]:
+    return demo.run_check(text, [REC] if records is None else records, "test catalogue", **kw)
+
+
+def verdicts(result: dict[str, Any]) -> dict[str, str]:
+    return {row["id"]: row["verdict"] for row in result["rows"]}
+
+
+# ---------------------------------------------------------------- shipped files
+
+
+def test_vendored_citeproof_is_an_exact_copy_of_src() -> None:
+    done = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "sync_citeproof.py"), "--check"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+
+
+def test_sample_catalogue_records_are_complete_and_honest() -> None:
+    dois = [r["doi"].lower() for r in CATALOGUE]
+    assert len(dois) == len(set(dois)) == 7
+    for record in CATALOGUE:
+        assert {"doi", "title", "authors", "year", "journal", "provenance"} <= set(record)
+        assert isinstance(record["retracted"], bool)
+        assert "Retraction Watch" in record["provenance"]
+    assert [r["retracted"] for r in CATALOGUE].count(True) == 2
+
+
+def test_good_list_is_all_verified() -> None:
+    result = check(GOOD, CATALOGUE)
+    assert set(verdicts(result).values()) == {"VERIFIED"}
+    assert result["summary"]["verified"] == {"count": 5, "percent": 100.0}
+    assert result["summary"]["no_verdict"]["count"] == 0
+
+
+def test_messy_list_gets_the_documented_verdicts() -> None:
+    result = check(MESSY, CATALOGUE)
+    assert verdicts(result) == {
+        "mckinney2010": "VERIFIED",
+        "harris2020": "VERIFIED",
+        "waskom2021": "METADATA_MISMATCH",
+        "vanderwalt2014": "METADATA_MISMATCH",
+        "virtanen2020": "METADATA_MISMATCH",
+        "hwang2005": "VERIFIED",
+        "wilkinson2016": "NEEDS_REVIEW",
+        "pedregosa2011": "NEEDS_REVIEW",
+        "invented2026": "NEEDS_REVIEW",
+        "mckinney2010b": "VERIFIED",
+    }
+    flags = {row["id"]: [f["status"] for f in row["flags"]] for row in result["rows"]}
+    assert flags["hwang2005"] == ["RETRACTED"]
+    assert flags["mckinney2010b"] == ["DUPLICATE"]
+    notes = {row["id"]: row["evidence"] for row in result["rows"]}
+    title_line = next(
+        e["value"] for e in notes["waskom2021"] if e["label"] == "Difference in title"
+    )
+    assert "near match, probably a typo" in title_line
+    author_line = next(
+        e["value"] for e in notes["vanderwalt2014"] if e["label"] == "Difference in authors"
+    )
+    assert "same authors in a different order" in author_line
+
+
+def test_json_example_shows_uncited_and_missing() -> None:
+    result = check(JSON_EXAMPLE, CATALOGUE)
+    assert result["summary"]["other_flags"]["UNCITED_REFERENCE"] == 1
+    assert result["summary"]["other_flags"]["MISSING_REFERENCE"] == 1
+    assert [m["id"] for m in result["missing_references"]] == ["r9"]
+
+
+# ---------------------------------------------------------------- the summary is honest
+
+
+def test_buckets_always_add_up_and_percentages_match() -> None:
+    result = check(MESSY, CATALOGUE)
+    s = result["summary"]
+    assert (
+        s["verified"]["count"] + s["metadata_mismatch"]["count"] + s["no_verdict"]["count"]
+        == s["total"]
+        == 10
+    )
+    assert (
+        s["verified"]["percent"],
+        s["metadata_mismatch"]["percent"],
+        s["no_verdict"]["percent"],
+    ) == (40.0, 30.0, 30.0)
+
+
+def test_no_verdict_is_reported_beside_verified() -> None:
+    result = check(BIB.replace("10.1/x", "10.9/unknown"))
+    s = result["summary"]
+    assert s["verified"]["count"] == 0
+    assert s["no_verdict"] == {"count": 1, "percent": 100.0}
+
+
+def test_verdict_names_and_messages_are_citeproofs_own() -> None:
+    result = check(MESSY, CATALOGUE)
+    cp = {
+        f["evidence"].get("reference"): f
+        for f in result["report"]["findings"]
+        if f["status"] == "NEEDS_REVIEW"
+    }
+    row = next(r for r in result["rows"] if r["id"] == "wilkinson2016")
+    assert row["verdict"] == "NEEDS_REVIEW"
+    assert row["message"] == cp["wilkinson2016"]["message"]
+    assert "this does not show it is fabricated" in row["message"]
+    direct = citeproof(
+        {
+            "references": __import__("citeproof.bibtex", fromlist=["parse_bibtex"]).parse_bibtex(
+                MESSY
+            ),
+            "catalogue": CATALOGUE,
+            "citations": [r["id"] for r in result["rows"]],
+        }
+    )
+    direct.pop("generated_at")
+    reported = dict(result["report"])
+    reported.pop("generated_at")
+    assert reported == direct  # the demo adds nothing to CiteProof's own report
+
+
+def test_not_found_wording_and_evidence_and_person_note() -> None:
+    result = check(MESSY, CATALOGUE)
+    row = next(r for r in result["rows"] if r["id"] == "invented2026")
+    assert row["headline"] == "Not found in this catalogue."
+    labels = {e["label"]: e["value"] for e in row["evidence"]}
+    assert labels["DOI looked up"] == "10.9999/demo.invented-001"
+    assert "7 records" in labels["Catalogue searched"]
+    assert "A person must decide" in row["person_note"]
+
+
+def test_demo_text_never_calls_a_reference_fake_or_fabricated() -> None:
+    result = check(MESSY, CATALOGUE)
+    for row in result["rows"]:
+        demo_text = " ".join(
+            [row["headline"], row["person_note"], *(e["value"] for e in row["evidence"])]
+        )
+        assert not re.search(r"\b(fake|fabricat|bogus|false)\w*", demo_text, re.I), demo_text
+    assert not re.search(r"fake|fabricat", " ".join(demo.HEADLINES.values()), re.I)
+
+
+def test_missing_metadata_names_which_side_lacks_it() -> None:
+    no_journal = BIB.replace("  journal = {J Things},\n", "")
+    row = check(no_journal)["rows"][0]
+    assert row["verdict"] == "METADATA_MISMATCH"
+    line = next(e["value"] for e in row["evidence"] if e["label"] == "Difference in journal")
+    assert "missing from your reference" in line
+
+
+def test_no_doi_reference() -> None:
+    row = check(BIB.replace("  doi = {10.1/x}\n", "  year2 = {1}\n"))["rows"][0]
+    assert row["verdict"] == "NEEDS_REVIEW"
+    assert row["headline"] == demo.HEADLINES["NEEDS_REVIEW_NO_DOI"]
+
+
+def test_unknown_retraction_status_is_flagged_and_counted() -> None:
+    unknown = {k: v for k, v in REC.items() if k != "retracted"}
+    result = check(BIB, [unknown])
+    assert result["summary"]["other_flags"]["RETRACTION_STATUS_NOT_SUPPLIED"] == 1
+    assert result["summary"]["verified"]["count"] == 1
+
+
+# ---------------------------------------------------------------- reading references
+
+
+def test_empty_and_whitespace_input_gives_a_readable_error() -> None:
+    for text in ("", "   \n\t "):
+        with pytest.raises(demo.DemoError) as caught:
+            check(text)
+        assert caught.value.title == "Nothing to check yet"
+
+
+def test_plain_text_reference_list_is_explained_not_guessed() -> None:
+    with pytest.raises(demo.DemoError) as caught:
+        check("Smith, J. (2020). A study of things. Journal of Things, 4(2), 1-10.")
+    assert caught.value.title == "No BibTeX entries found"
+    assert "BibTeX" in caught.value.hint
+
+
+def test_bibtex_treats_every_entry_as_cited_and_says_so() -> None:
+    parsed = demo.parse_references(BIB)
+    assert parsed["citations"] == ["a1"]
+    assert any("treated as cited" in n for n in parsed["notices"])
+
+
+def test_bare_json_list_and_missing_citations_are_handled_with_a_notice() -> None:
+    refs = json.dumps(
+        [{"id": "r", "doi": "10.1/x", "title": "T", "authors": ["A B"], "year": 1, "journal": "J"}]
+    )
+    parsed = demo.parse_references(refs)
+    assert parsed["citations"] == ["r"]
+    assert any("citations" in n for n in parsed["notices"])
+
+
+@pytest.mark.parametrize(
+    ("text", "title"),
+    [
+        ('{"references": [', "Could not read your reference list as JSON"),
+        ('{"references": NaN}', "The JSON contains NaN or Infinity"),
+        ("@article{a, title = {oops", "A BibTeX entry is not closed"),
+        ('@article{a, title = "oops}', "A BibTeX field is not closed"),
+    ],
+)
+def test_malformed_input_gives_specific_messages(text: str, title: str) -> None:
+    with pytest.raises(demo.DemoError) as caught:
+        demo.parse_references(text)
+    assert caught.value.title == title
+
+
+def test_duplicate_ids_and_catalogue_dois_are_explained_with_citeproofs_text() -> None:
+    twice = BIB + BIB
+    with pytest.raises(demo.DemoError) as caught:
+        check(twice)
+    assert caught.value.title == "Two references share the same id"
+    assert caught.value.detail == "CiteProof said: Reference ids must be unique"
+    with pytest.raises(demo.DemoError) as caught2:
+        check(BIB, [REC, {**REC, "doi": "https://doi.org/10.1/X"}])
+    assert caught2.value.title == "The catalogue lists the same DOI twice"
+
+
+def test_catalogue_record_without_doi_is_explained() -> None:
+    with pytest.raises(demo.DemoError) as caught:
+        check(BIB, [{"title": "x"}])
+    assert "doi" in caught.value.title
+
+
+def test_limits_are_enforced_with_readable_messages() -> None:
+    with pytest.raises(demo.DemoError, match="too long"):
+        demo.parse_references("@" + "x" * (demo.MAX_INPUT_CHARS + 1))
+    many = "".join(f"@misc{{k{i}, title = {{T}}}}\n" for i in range(demo.MAX_REFERENCES + 1))
+    with pytest.raises(demo.DemoError, match="Too many references"):
+        demo.parse_references(many)
+
+
+def test_pasted_text_is_never_interpreted_as_markup() -> None:
+    nasty = BIB.replace("A Study of Things", "<img src=x onerror=alert(1)> & co")
+    row = check(nasty)["rows"][0]
+    assert row["title"] == "<img src=x onerror=alert(1)> & co"  # kept as plain text for textContent
+
+
+def test_no_catalogue_is_an_error() -> None:
+    with pytest.raises(demo.DemoError) as caught:
+        demo.run_check(BIB, [], "none")
+    assert caught.value.title == "No catalogue loaded"
+
+
+def test_embedded_catalogue_in_pasted_json_is_used_and_announced() -> None:
+    payload = {
+        "references": [
+            {"id": "a1", **{k: v for k, v in REC.items() if k not in ("retracted", "provenance")}}
+        ],
+        "catalogue": [REC],
+        "citations": ["a1"],
+    }
+    result = demo.run_check(json.dumps(payload), CATALOGUE, "the sample")
+    assert result["summary"]["verified"]["count"] == 1
+    assert any('own "catalogue"' in n for n in result["notices"])
+
+
+# ---------------------------------------------------------------- reading catalogues
+
+
+CSV = (
+    "﻿DOI,Title,Author,Year,Journal,Retracted,Provenance,Notes\r\n"
+    '10.1/x,"A Study of Things","Ada Lovelace; Alan Turing",2020,J Things,false,"my, export",'
+    "ignored\r\n"
+    ",No doi here,A B,2000,J,,\r\n"
+    "10.2/y,Second,B C,2001,J2,yes,\r\n"
+    "\r\n"
+    "10.3/z,Third,,2002,,,\r\n"
+)
+
+
+def test_csv_catalogue_converts_to_citeproof_records() -> None:
+    parsed = demo.parse_catalogue(CSV, "c.csv")
+    first, second, third = parsed["records"]
+    assert first == {
+        "doi": "10.1/x",
+        "title": "A Study of Things",
+        "authors": "Ada Lovelace; Alan Turing",
+        "year": "2020",
+        "journal": "J Things",
+        "provenance": "my, export",
+        "retracted": False,
+    }
+    assert second["retracted"] is True
+    assert "retracted" not in third and "authors" not in third and "journal" not in third
+    assert any("1 row(s) with no DOI were skipped (rows 3)" in n for n in parsed["notices"])
+    assert any("Ignored columns: notes" in n for n in parsed["notices"])
+
+
+def test_csv_blank_retracted_means_not_supplied_not_false() -> None:
+    parsed = demo.parse_catalogue(
+        "doi,title,authors,year,journal,retracted\n"
+        "10.1/x,A Study of Things,Ada Lovelace; Alan Turing,2020,J Things,\n",
+        "c.csv",
+    )
+    result = check(BIB, parsed["records"])
+    assert result["summary"]["other_flags"]["RETRACTION_STATUS_NOT_SUPPLIED"] == 1
+
+
+def test_csv_without_retracted_column_says_so() -> None:
+    parsed = demo.parse_catalogue("doi,title\n10.1/x,T\n", "c.csv")
+    assert any('no "retracted" column' in n for n in parsed["notices"])
+
+
+def test_csv_semicolon_delimiter_is_detected() -> None:
+    parsed = demo.parse_catalogue("doi;title;year\n10.1/x;T;2020\n", "c.csv")
+    assert parsed["records"] == [{"doi": "10.1/x", "title": "T", "year": "2020"}]
+
+
+@pytest.mark.parametrize(
+    ("text", "title"),
+    [
+        ("title,year\nT,2020\n", 'The catalogue needs a "doi" column'),
+        ("doi,retracted\n10.1/x,maybe\n", 'A "retracted" cell is not yes/no'),
+        ("doi,title\n,no doi\n", "The catalogue has no usable records"),
+        ("   \n", "The catalogue file is empty"),
+        ("[1, 2]", "A catalogue record is not an object"),
+        ('{"nope": 1}', "No catalogue found in that JSON"),
+        ("[{", "Could not read c.json as JSON"),
+    ],
+)
+def test_bad_catalogue_files_give_readable_errors(text: str, title: str) -> None:
+    name = "c.json" if text.lstrip().startswith(("[", "{")) else "c.csv"
+    with pytest.raises(demo.DemoError) as caught:
+        demo.parse_catalogue(text, name)
+    assert caught.value.title == title
+
+
+def test_json_catalogue_forms() -> None:
+    assert demo.parse_catalogue(json.dumps([REC]), "c.json")["records"] == [REC]
+    assert demo.parse_catalogue(json.dumps({"catalogue": [REC], "references": []}), "c.json")[
+        "records"
+    ] == [REC]
+
+
+def test_catalogue_size_limit() -> None:
+    with pytest.raises(demo.DemoError, match="too large"):
+        demo.parse_catalogue("doi\n" + "x" * demo.MAX_CATALOGUE_CHARS, "big.csv")
+
+
+# ---------------------------------------------------------------- CSV export
+
+
+def read_csv(text: str) -> list[dict[str, str]]:
+    return list(csv.DictReader(io.StringIO(text)))
+
+
+def test_csv_export_has_one_row_per_reference_plus_missing_citations() -> None:
+    result = check(JSON_EXAMPLE, CATALOGUE)
+    rows = read_csv(demo.results_to_csv(result))
+    assert [r["reference_id"] for r in rows] == ["r1", "r2", "r3", "r9"]
+    assert list(rows[0]) == demo.CSV_COLUMNS
+    assert rows[0]["verdict"] == "VERIFIED"
+    assert "UNCITED_REFERENCE" in rows[1]["other_flags"]
+    assert rows[2]["verdict"] == "NEEDS_REVIEW"
+    assert rows[3]["verdict"] == "MISSING_REFERENCE"
+    assert all(r["person_decision"] == "" and r["citeproof_version"] for r in rows)
+
+
+def test_csv_export_neutralises_spreadsheet_formulas() -> None:
+    evil = BIB.replace("A Study of Things", '=HYPERLINK("http://x.example","go")').replace(
+        "a1", "+cmd"
+    )
+    rows = read_csv(demo.results_to_csv(check(evil)))
+    assert rows[0]["title_as_given"].startswith("'=")
+    assert rows[0]["reference_id"].startswith("'+")
+
+
+def test_csv_export_survives_commas_quotes_newlines_and_unicode() -> None:
+    odd = BIB.replace("A Study of Things", 'Stéfan, "quoted"\n title')
+    rows = read_csv(demo.results_to_csv(check(odd)))
+    assert rows[0]["title_as_given"] == 'Stéfan, "quoted" title'
+
+
+# ---------------------------------------------------------------- optional Crossref lookup
+
+
+CROSSREF = {
+    "status": "ok",
+    "message": {
+        "DOI": "10.9/new",
+        "title": ["A <i>Fresh</i> Study &amp; More"],
+        "author": [{"family": "Lovelace", "given": "Ada"}, {"name": "The Consortium"}],
+        "issued": {"date-parts": [[2021, 5, 1]]},
+        "container-title": ["J Things"],
+    },
+}
+
+
+def test_crossref_url_only_for_real_looking_dois_and_is_encoded() -> None:
+    assert demo.crossref_url("https://doi.org/10.1/x") is None  # too few digits in the prefix
+    assert (
+        demo.crossref_url("doi:10.1038/S41586-020-2649-2")
+        == "https://api.crossref.org/works/10.1038/s41586-020-2649-2"
+    )
+    assert (
+        demo.crossref_url("10.1016/s0140-6736(97)11096-0")
+        == "https://api.crossref.org/works/10.1016/s0140-6736%2897%2911096-0"
+    )
+    for bad in ("", "not a doi", "10.1234/has space", "10.1234/"):
+        assert demo.crossref_url(bad) is None
+
+
+def test_lookup_candidates_list_only_dois_not_in_the_catalogue() -> None:
+    result = check(MESSY, CATALOGUE)
+    items = result["lookup"]["items"]
+    assert [i["doi"] for i in items] == ["10.1038/sdata.2016.18", "10.9999/demo.invented-001"]
+    assert all(i["url"].startswith("https://api.crossref.org/works/") for i in items)
+    assert result["lookup"]["truncated"] == 0
+
+
+def test_lookup_candidates_are_capped() -> None:
+    many = "".join(
+        f"@misc{{k{i}, title = {{T}}, doi = {{10.5555/n{i}}}}}\n"
+        for i in range(demo.MAX_LOOKUPS + 5)
+    )
+    lookup = check(many)["lookup"]
+    assert len(lookup["items"]) == demo.MAX_LOOKUPS and lookup["truncated"] == 5
+
+
+def test_crossref_response_maps_to_a_labelled_catalogue_record() -> None:
+    record = demo.crossref_to_record(CROSSREF, "2026-10-20")
+    assert record["doi"] == "10.9/new"
+    assert record["title"] == "A Fresh Study & More"
+    assert record["authors"] == ["Lovelace, Ada", "The Consortium"]
+    assert (record["year"], record["journal"]) == ("2021", "J Things")
+    assert record["provenance"].startswith("Crossref REST API")
+    assert "2026-10-20" in record["provenance"]
+    assert "retracted" not in record  # never invented
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [None, [], {}, {"message": []}, {"message": {"title": ["x"]}}, {"message": {"DOI": 5}}],
+)
+def test_unexpected_crossref_payloads_are_rejected_readably(payload: Any) -> None:
+    with pytest.raises(demo.DemoError) as caught:
+        demo.crossref_to_record(payload, "2026-10-20")
+    assert caught.value.title == "Crossref sent something unexpected"
+
+
+def test_looked_up_record_goes_through_citeproof_and_is_labelled() -> None:
+    extra = demo.crossref_to_record(
+        {
+            "message": {
+                "DOI": "10.1/x",
+                "title": ["A Study of Things"],
+                "author": [
+                    {"family": "Lovelace", "given": "Ada"},
+                    {"family": "Turing", "given": "Alan"},
+                ],
+                "issued": {"date-parts": [[2020]]},
+                "container-title": ["J Things"],
+            }
+        },
+        "2026-10-20",
+    )
+    result = check(BIB, CATALOGUE, extra_records=[extra])
+    row = result["rows"][0]
+    assert row["verdict"] == "VERIFIED" and row["from_crossref"] is True
+    assert result["summary"]["other_flags"]["RETRACTION_STATUS_NOT_SUPPLIED"] == 1
+    assert any("added from your Crossref lookup" in n for n in result["notices"])
+
+
+def test_lookup_never_overrides_an_existing_catalogue_record() -> None:
+    extra = {"doi": "10.1/x", "title": "Different", "provenance": "Crossref REST API"}
+    result = check(BIB, [REC], extra_records=[extra])
+    assert result["rows"][0]["from_crossref"] is False and result["catalogue_size"] == 1
+
+
+# ---------------------------------------------------------------- bridge used by the page
+
+
+def test_bridge_returns_json_and_never_raises() -> None:
+    ok = json.loads(demo.api_check(BIB, json.dumps([REC]), "x", ""))
+    assert ok["ok"] is True and ok["summary"]["total"] == 1
+    bad = json.loads(demo.api_check("", json.dumps([REC]), "x", ""))
+    assert bad["ok"] is False and bad["error"]["title"] == "Nothing to check yet"
+    weird = json.loads(demo.api_check(BIB, "{not json", "x", ""))
+    assert weird["ok"] is False and weird["error"]["title"]
+    assert json.loads(demo.api_parse_catalogue("doi\n10.1/x\n", "c.csv"))["ok"] is True
+    assert "csv" in json.loads(demo.api_csv(json.dumps(ok)))

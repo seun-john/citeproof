@@ -1,0 +1,409 @@
+"""Load the demo in headless Chromium: a good list, a messy list, an empty input, and the rest.
+
+Run: PYODIDE_DIST=/path/to/pyodide pytest tests/browser -q   (see docs/README.md)
+"""
+
+from __future__ import annotations
+
+import csv
+import io
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+from playwright.sync_api import expect
+
+DATA = Path(__file__).resolve().parent.parent.parent / "docs" / "data"
+MARKER = "ZZ-PRIVATE-MARKER-7431"
+ALLOWED_HOSTS = {"127.0.0.1", "cdn.jsdelivr.net"}
+
+
+def sideways_overflow(page: Any) -> int:
+    return page.evaluate(
+        "document.documentElement.scrollWidth - document.documentElement.clientWidth"
+    )
+
+
+def results_text(session: Any) -> str:
+    return session.page.inner_text("#results-body")
+
+
+def load_sample(session: Any, name: str) -> None:
+    session.page.click(f"[data-sample='data/{name}']")
+    expect(session.page.locator("#refs")).not_to_have_value("")
+
+
+# ----------------------------------------------------------------------- the three cases
+
+
+def test_good_list(open_page: Any, shot: Any) -> None:
+    s = open_page()
+    load_sample(s, "sample-references-good.bib")
+    s.check()
+    expect(s.page.locator(".tile.verified .big")).to_have_text("5 of 5")
+    expect(s.page.locator(".tile.verified .pct")).to_have_text("100%")
+    expect(s.page.locator(".tile.no_verdict .big")).to_have_text("0 of 5")
+    expect(s.page.locator(".tile.metadata_mismatch .big")).to_have_text("0 of 5")
+    assert s.page.locator(".ref .badge.verified").count() == 5
+    assert "No other flags." in results_text(s)
+    assert "A person must decide" in results_text(s)
+    assert s.errors == []
+    shot(s.page, "good-list-desktop-light")
+    shot(s.page, "good-list-desktop-light-fullpage", True)
+
+
+def test_messy_list(open_page: Any, shot: Any) -> None:
+    s = open_page()
+    load_sample(s, "sample-references-messy.bib")
+    s.check()
+    page = s.page
+    expect(page.locator(".tile.verified .big")).to_have_text("4 of 10")
+    expect(page.locator(".tile.metadata_mismatch .big")).to_have_text("3 of 10")
+    expect(page.locator(".tile.no_verdict .big")).to_have_text("3 of 10")
+    # The no-verdict rate is as prominent as the pass rate.
+    size = "el => getComputedStyle(el).fontSize"
+    assert page.locator(".tile.verified .big").evaluate(size) == page.locator(
+        ".tile.no_verdict .big"
+    ).evaluate(size)
+    assert page.locator(".tile.verified .pct").evaluate(size) == page.locator(
+        ".tile.no_verdict .pct"
+    ).evaluate(size)
+    text = results_text(s)
+    assert text.count("Not found in this catalogue.") == 2
+    assert "No DOI, so it could not be looked up in this catalogue." in text
+    assert "this does not show it is fabricated" in text  # CiteProof's own wording, verbatim
+    assert "near match, probably a typo" in text
+    assert "same authors in a different order" in text
+    assert "RETRACTED" in text and "DUPLICATE" in text
+    assert "Also flagged: 1 duplicate" in text
+    line = "4 verified (40%) \u00b7 3 metadata mismatch (30%) \u00b7 3 no verdict (30%)"
+    assert f"Of 10 references: {line}." in text
+    assert text.count("A person must decide.") >= 10
+    assert not re.search(r"\b(fake|bogus|forged)\b", text, re.I)
+    assert not re.search(
+        r"\bfabricated\b", text.replace("does not show it is fabricated", ""), re.I
+    )
+    assert "What this does not check" in page.inner_text("#not-checked h2")
+    assert s.errors == []
+    shot(page, "messy-list-desktop-light")
+    shot(page, "messy-list-desktop-light-fullpage", True)
+
+
+def test_empty_input(open_page: Any, shot: Any) -> None:
+    s = open_page()
+    s.check("")
+    alert = s.page.locator("#results-body [role=alert]")
+    expect(alert).to_contain_text("Nothing to check yet")
+    expect(alert).to_contain_text("Paste a BibTeX list")
+    assert s.page.locator(".tile").count() == 0  # no 0% / NaN summary for nothing
+    s.check("   \n  ")
+    expect(alert).to_contain_text("Nothing to check yet")
+    assert s.errors == []
+    shot(s.page, "empty-input-desktop-light")
+
+
+def test_plain_text_list_is_explained(open_page: Any) -> None:
+    s = open_page()
+    s.check("Smith, J. (2020). A study of things. Journal of Things, 4(2), 1-10.")
+    expect(s.page.locator("#results-body [role=alert]")).to_contain_text("No BibTeX entries found")
+
+
+# ----------------------------------------------------------------------- privacy
+
+
+def test_nothing_pasted_leaves_the_device(open_page: Any) -> None:
+    s = open_page()
+    bib = (DATA / "sample-references-good.bib").read_text(encoding="utf-8")
+    s.check(bib.replace("harris2020", MARKER))
+    expect(s.page.locator(".tile")).to_have_count(3)
+    assert s.hosts() <= ALLOWED_HOSTS, s.hosts()
+    assert s.hooks["blocked"] == []
+    assert {r.method for r in s.requests} == {"GET"}
+    for r in s.requests:
+        assert MARKER not in r.url and not r.post_data
+        assert MARKER not in json.dumps(r.headers)
+    assert not any("crossref" in r.url for r in s.requests)
+    assert s.page.context.cookies() == []
+    storage = s.page.evaluate("[localStorage.length, sessionStorage.length]")
+    assert storage == [0, 0]
+    csp = s.page.locator("meta[http-equiv='Content-Security-Policy']").get_attribute("content")
+    assert "default-src 'none'" in csp and "frame-src" not in csp
+
+
+# ----------------------------------------------------------------------- engine failure
+
+
+def test_cdn_failure_shows_a_readable_fallback(open_page: Any) -> None:
+    s = open_page(cdn="fail", wait=False)
+    expect(s.page.locator("#engine-failed")).to_be_visible(timeout=30_000)
+    text = s.page.inner_text("#engine-failed")
+    assert "could not be loaded" in text and "Nothing you pasted has been sent anywhere" in text
+    assert "pip install" in text
+    expect(s.page.locator("#check-btn")).to_be_disabled()
+    assert s.page.locator("#retry-engine").is_visible()
+
+
+def test_tampered_pyodide_is_refused(open_page: Any, pyodide_dist: Any) -> None:
+    if pyodide_dist is None:
+        return  # needs the local copy to alter
+    s = open_page(cdn="tamper", wait=False)
+    expect(s.page.locator("#engine-failed")).to_be_visible(timeout=30_000)
+    expect(s.page.locator("#check-btn")).to_be_disabled()
+
+
+# ----------------------------------------------------------------------- catalogue files
+
+
+def upload(session: Any, name: str, body: str) -> None:
+    session.page.set_input_files(
+        "#cat-input",
+        files=[{"name": name, "mimeType": "text/plain", "buffer": body.encode("utf-8")}],
+    )
+
+
+def test_own_csv_catalogue(open_page: Any) -> None:
+    s = open_page()
+    bib = (
+        "@article{k, author={Smith, Jane and Doe, Alex}, title={A study of things}, "
+        "journal={Journal of Things}, year={2020}, doi={10.1234/example}}"
+    )
+    upload(
+        s,
+        "mine.csv",
+        "doi,title,authors,year,journal,retracted,provenance\n"
+        '10.1234/example,A study of things,"Smith, Jane; Doe, Alex",2020,Journal of Things,'
+        "false,my library\n"
+        ",row without doi,,,,,\n",
+    )
+    expect(s.page.locator("#cat-status")).to_contain_text("Loaded 1 records from mine.csv")
+    expect(s.page.locator("#cat-status")).to_contain_text("1 row(s) with no DOI were skipped")
+    s.check(bib)
+    expect(s.page.locator(".tile.verified .big")).to_have_text("1 of 1")
+    assert "your file mine.csv" in results_text(s)
+    assert "my library" in results_text(s)
+
+
+def test_own_json_catalogue_and_unreadable_file(open_page: Any) -> None:
+    s = open_page()
+    upload(s, "bad.json", '[{"doi": ')
+    expect(s.page.locator("#cat-status")).to_contain_text("Could not read bad.json as JSON")
+    assert s.page.locator("#cat-sample").is_checked()
+    upload(s, "nodoi.csv", "title,year\nT,2020\n")
+    expect(s.page.locator("#cat-status")).to_contain_text('needs a "doi" column')
+    upload(s, "ok.json", json.dumps([{"doi": "10.1234/example", "title": "T"}]))
+    expect(s.page.locator("#cat-status")).to_contain_text("Loaded 1 records")
+
+
+def test_file_option_without_a_file_is_a_readable_error(open_page: Any) -> None:
+    s = open_page()
+    s.page.check("#cat-file")
+    s.check("@misc{a, title={T}, doi={10.1/x}}")
+    expect(s.page.locator("#results-body [role=alert]")).to_contain_text("No catalogue file chosen")
+
+
+# ----------------------------------------------------------------------- exports
+
+
+def test_csv_and_json_downloads(open_page: Any, tmp_path: Path) -> None:
+    s = open_page()
+    load_sample(s, "sample-references-messy.bib")
+    s.check()
+    with s.page.expect_download() as info:
+        s.page.click("#dl-csv")
+    path = tmp_path / info.value.suggested_filename
+    info.value.save_as(path)
+    assert path.name == "citeproof-results.csv"
+    rows = list(csv.DictReader(io.StringIO(path.read_text(encoding="utf-8-sig"))))
+    assert len(rows) == 10
+    by_id = {r["reference_id"]: r for r in rows}
+    assert by_id["invented2026"]["verdict"] == "NEEDS_REVIEW"
+    assert by_id["hwang2005"]["other_flags"].startswith("RETRACTED")
+    assert by_id["mckinney2010b"]["other_flags"].startswith("DUPLICATE")
+    with s.page.expect_download() as info2:
+        s.page.click("#dl-json")
+    report = json.loads(Path(info2.value.path()).read_text(encoding="utf-8"))
+    assert report["tool"] == "CiteProof" and len(report["findings"]) >= 10
+
+
+# ----------------------------------------------------------------------- optional Crossref lookup
+
+
+def crossref_ok(route: Any) -> None:
+    url = route.request.url
+    headers = {"access-control-allow-origin": "*", "content-type": "application/json"}
+    if url.endswith("10.1038/sdata.2016.18"):
+        body = {
+            "status": "ok",
+            "message": {
+                "DOI": "10.1038/sdata.2016.18",
+                "title": [
+                    "The FAIR Guiding Principles for scientific data management and stewardship"
+                ],
+                "author": [{"family": "Wilkinson", "given": "Mark D."}],
+                "issued": {"date-parts": [[2016, 3, 15]]},
+                "container-title": ["Scientific Data"],
+            },
+        }
+        route.fulfill(status=200, headers=headers, body=json.dumps(body))
+    else:
+        route.fulfill(status=404, headers=headers, body="Resource not found.")
+
+
+def test_crossref_is_off_by_default_and_sends_nothing(open_page: Any) -> None:
+    s = open_page(crossref=crossref_ok)
+    assert not s.page.locator("#crossref-on").is_checked()
+    load_sample(s, "sample-references-messy.bib")
+    s.check()
+    expect(s.page.locator(".tile")).to_have_count(3)
+    assert s.page.locator("#lookup-panel").count() == 0
+    assert not any("crossref" in r.url for r in s.requests)
+
+
+def test_crossref_needs_a_second_explicit_step_and_shows_what_is_sent(
+    open_page: Any, shot: Any
+) -> None:
+    s = open_page(crossref=crossref_ok)
+    load_sample(s, "sample-references-messy.bib")
+    s.page.check("#crossref-on")
+    s.check()
+    panel = s.page.locator("#lookup-panel")
+    expect(panel).to_contain_text("Nothing has been sent")
+    expect(panel).to_contain_text("https://api.crossref.org/works/10.1038/sdata.2016.18")
+    expect(panel).to_contain_text("https://api.crossref.org/works/10.9999/demo.invented-001")
+    assert not any("crossref" in r.url for r in s.requests)  # ticking and checking sent nothing
+    assert "@" not in panel.inner_text()  # no email address anywhere in what is sent
+    s.page.click("#lookup-go")
+    expect(s.page.locator("#results-h")).to_have_text(
+        "Results (with Crossref lookup)", timeout=30_000
+    )
+    sent = [r for r in s.requests if "crossref" in r.url]
+    assert sorted(r.url for r in sent) == [
+        "https://api.crossref.org/works/10.1038/sdata.2016.18",
+        "https://api.crossref.org/works/10.9999/demo.invented-001",
+    ]
+    assert all(r.method == "GET" and not r.post_data for r in sent)
+    assert all("mailto" not in r.url and "cookie" not in r.headers for r in sent)
+    text = results_text(s)
+    assert "Crossref returned a record" in text
+    assert "Crossref has no record for this DOI" in text and "not proof it does not exist" in text
+    # The FAIR paper moves from "no verdict" to a comparison. CiteProof then flags its authors
+    # ("Wilkinson ... and others" is not the full list), so the result is a mismatch, not a pass.
+    expect(s.page.locator(".tile.verified .big")).to_have_text("4 of 10")
+    expect(s.page.locator(".tile.metadata_mismatch .big")).to_have_text("4 of 10")
+    expect(s.page.locator(".tile.no_verdict .big")).to_have_text("2 of 10")
+    assert "live Crossref record" in text and "Crossref REST API" in text
+    shot(s.page, "crossref-after-lookup-desktop-light")
+
+
+def test_crossref_rate_limit_stops_politely(open_page: Any) -> None:
+    def limited(route: Any) -> None:
+        route.fulfill(
+            status=429,
+            headers={"access-control-allow-origin": "*", "retry-after": "0"},
+            body="slow down",
+        )
+
+    s = open_page(crossref=limited)
+    load_sample(s, "sample-references-messy.bib")
+    s.page.check("#crossref-on")
+    s.check()
+    s.page.click("#lookup-go")
+    expect(s.page.locator("#lookup-panel")).to_contain_text(
+        "asked this page to slow down", timeout=60_000
+    )
+    text = s.page.inner_text("#lookup-panel")
+    assert "Not looked up. Nothing was sent for this DOI." in text
+    expect(s.page.locator(".tile.no_verdict .big")).to_have_text("3 of 10")  # nothing changed
+    assert s.errors == []
+
+
+def test_crossref_unreachable_is_a_readable_message(open_page: Any) -> None:
+    def down(route: Any) -> None:
+        route.abort()
+
+    s = open_page(crossref=down)
+    load_sample(s, "sample-references-messy.bib")
+    s.page.check("#crossref-on")
+    s.check()
+    s.page.click("#lookup-go")
+    expect(s.page.locator("#lookup-panel")).to_contain_text(
+        "Could not reach Crossref", timeout=30_000
+    )
+    expect(s.page.locator(".tile")).to_have_count(3)
+
+
+# ----------------------------------------------------------------------- accessibility and layout
+
+
+def test_keyboard_only(open_page: Any) -> None:
+    s = open_page()
+    page = s.page
+    page.keyboard.press("Tab")
+    assert page.evaluate("document.activeElement.className") == "skip"
+    page.keyboard.press("Enter")
+    page.focus("#refs")
+    page.keyboard.type("@misc{k, title={Keyboard}, doi={10.1/none}}")
+    for _ in range(40):
+        page.keyboard.press("Tab")
+        if page.evaluate("document.activeElement.id") == "check-btn":
+            break
+    assert page.evaluate("document.activeElement.id") == "check-btn"
+    page.keyboard.press("Enter")
+    expect(page.locator(".tile")).to_have_count(3)
+    assert page.evaluate("document.activeElement.id") == "results-h"
+    page.focus("#dl-csv")
+    with page.expect_download():
+        page.keyboard.press("Enter")
+
+
+def test_every_control_has_an_accessible_name(open_page: Any) -> None:
+    s = open_page()
+    load_sample(s, "sample-references-messy.bib")
+    s.check()
+    names = s.page.evaluate(
+        """() => [...document.querySelectorAll('button, input, textarea, summary, a[href]')]
+            .map(e => {
+              const label = e.labels && e.labels[0] ? e.labels[0].textContent : '';
+              const name = e.getAttribute('aria-label') || label || e.textContent || '';
+              return [e.tagName, e.id, name.trim()];
+            })"""
+    )
+    assert names and all(name for _, _, name in names), [n for n in names if not n[2]]
+    assert s.page.evaluate("document.documentElement.lang") == "en"
+    assert s.page.evaluate("document.querySelectorAll('h1').length") == 1
+
+
+def test_phone_width_has_no_horizontal_scroll(open_page: Any, shot: Any) -> None:
+    s = open_page(width=360, height=740)
+    load_sample(s, "sample-references-messy.bib")
+    s.check()
+    expect(s.page.locator(".tile")).to_have_count(3)
+    assert sideways_overflow(s.page) <= 0
+    button = s.page.locator("#check-btn").bounding_box()
+    assert button["height"] >= 44
+    shot(s.page, "messy-list-phone-light")
+    shot(s.page, "messy-list-phone-light-fullpage", True)
+
+
+def test_dark_mode_changes_the_palette(open_page: Any, shot: Any) -> None:
+    light = open_page(scheme="light").page
+    dark_session = open_page(scheme="dark", width=390, height=800)
+    dark = dark_session.page
+    get = "getComputedStyle(document.body).backgroundColor"
+    assert light.evaluate(get) != dark.evaluate(get)
+    load_sample(dark_session, "sample-references-messy.bib")
+    dark_session.check()
+    expect(dark.locator(".tile")).to_have_count(3)
+    assert sideways_overflow(dark) <= 0
+    shot(dark, "messy-list-phone-dark")
+    shot(dark, "messy-list-phone-dark-fullpage", True)
+
+
+def test_json_example_shows_uncited_and_missing(open_page: Any) -> None:
+    s = open_page()
+    load_sample(s, "sample-references.json")
+    s.check()
+    text = results_text(s)
+    assert "UNCITED_REFERENCE" in text and "MISSING_REFERENCE" in text
+    assert "Cited in the text but not in the bibliography." in text

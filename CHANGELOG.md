@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add a static browser demo in `docs/` that runs CiteProof's unchanged Python with Pyodide. No change to the CiteProof package.
+
 ## 0.1.0
 
 First release.

@@ -71,6 +71,10 @@ Findings: `NO_CITATION`, `SOURCE_UNAVAILABLE`, and `HUMAN_REVIEW_REQUIRED` for e
 - Title and author comparison is lexical. A reference can match a real record and still be cited for the wrong reason, which is what `claims` is for.
 - Reports can contain source passages and confidential text. Read them before sharing.
 
+## Browser demo
+
+A static demo runs CiteProof's own Python in your browser with Pyodide: paste a reference list, see which references match a catalogue, and export the results. Nothing you paste leaves your device unless you turn on the optional, off-by-default Crossref lookup. See [docs/README.md](docs/README.md) for the privacy note, its limits and how to run it locally.
+
 ## Develop
 
 ```bash
