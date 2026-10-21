@@ -432,3 +432,136 @@ def test_json_example_shows_uncited_and_missing(open_page: Any) -> None:
     text = results_text(s)
     assert "UNCITED_REFERENCE" in text and "MISSING_REFERENCE" in text
     assert "Cited in the text but not in the bibliography." in text
+
+
+# ----------------------------------------------------------------------- optional title search
+
+
+CATALOGUE = json.loads((DATA / "sample-catalogue.json").read_text(encoding="utf-8"))
+NUMPY = CATALOGUE[0]
+NO_DOI_BIB = (
+    "@article{harris2020,\n"
+    "  author = {" + " and ".join(NUMPY["authors"]) + "},\n"
+    "  title = {Array programming with NumPy},\n"
+    "  journal = {Nature},\n"
+    "  year = {2020}\n}\n"
+)
+SEARCH_ORIGIN = "https://api.crossref.org/works?query.bibliographic="
+
+
+def crossref_item(record: dict[str, Any], **changes: Any) -> dict[str, Any]:
+    authors = []
+    for name in record["authors"]:
+        family, _, given = name.partition(",")
+        authors.append({"family": family.strip(), "given": given.strip()})
+    item = {
+        "DOI": record["doi"],
+        "title": [record["title"]],
+        "author": authors,
+        "issued": {"date-parts": [[int(record["year"])]]},
+        "container-title": [record["journal"]],
+    }
+    return {**item, **changes}
+
+
+def search_reply(items: list[dict[str, Any]]) -> Any:
+    def reply(route: Any) -> None:
+        body = {"status": "ok", "message": {"items": items}}
+        route.fulfill(
+            status=200,
+            headers={"access-control-allow-origin": "*", "content-type": "application/json"},
+            body=json.dumps(body),
+        )
+
+    return reply
+
+
+def searches(session: Any) -> list[Any]:
+    return [r for r in session.requests if r.url.startswith(SEARCH_ORIGIN)]
+
+
+def test_title_search_is_off_by_default(open_page: Any) -> None:
+    s = open_page(crossref=search_reply([crossref_item(NUMPY)]))
+    assert not s.page.locator("#search-on").is_checked()
+    s.check(NO_DOI_BIB)
+    expect(s.page.locator(".tile.no_verdict .big")).to_have_text("1 of 1")
+    assert s.page.locator("#search-panel").count() == 0
+    assert not any("crossref" in r.url for r in s.requests)
+
+
+def test_title_search_shows_what_is_sent_and_sends_nothing_until_clicked(
+    open_page: Any, shot: Any
+) -> None:
+    decoy = {
+        **NUMPY,
+        "doi": "10.5555/decoy",
+        "title": "Array programming in Python",
+        "year": "2019",
+    }
+    s = open_page(crossref=search_reply([crossref_item(decoy), crossref_item(NUMPY)]))
+    s.page.check("#search-on")
+    s.check(NO_DOI_BIB)
+    panel = s.page.locator("#search-panel")
+    expect(panel).to_contain_text("Nothing has been sent")
+    expect(panel).to_contain_text("“Array programming with NumPy Harris 2020”")
+    expect(panel).to_contain_text(
+        SEARCH_ORIGIN + "Array%20programming%20with%20NumPy%20Harris%202020"
+    )
+    assert searches(s) == []  # ticking the box and checking sent nothing
+    s.page.click("#search-go")
+    expect(s.page.locator(".candidates")).to_be_visible(timeout=30_000)
+    sent = searches(s)
+    assert len(sent) == 1 and sent[0].method == "GET" and not sent[0].post_data
+    # Only the title, the first author's family name and the year were sent.
+    query = sent[0].url.split("query.bibliographic=")[1].split("&")[0]
+    assert query == "Array%20programming%20with%20NumPy%20Harris%202020"
+    for leaked in ("Nature", "Millman", "Charles", NUMPY["doi"]):
+        assert leaked not in sent[0].url
+    assert "mailto" not in sent[0].url and "cookie" not in sent[0].headers
+    text = s.page.inner_text("#results-body")
+    assert "Possible DOIs found by Crossref (suggestions, not checked)" in text
+    assert "Nothing is chosen for you" in text
+    assert "year matches" in text and "year differs" in text
+    # Suggestions alone change nothing: the verdict is still "no verdict".
+    expect(s.page.locator(".tile.no_verdict .big")).to_have_text("1 of 1")
+    expect(s.page.locator(".tile.verified .big")).to_have_text("0 of 1")
+    shot(s.page, "title-search-candidates-desktop-light")
+
+
+def test_picking_a_doi_reruns_citeproof_and_is_labelled(open_page: Any) -> None:
+    s = open_page(crossref=search_reply([crossref_item(NUMPY)]))
+    s.page.check("#search-on")
+    s.check(NO_DOI_BIB)
+    s.page.click("#search-go")
+    expect(s.page.locator(".candidates")).to_be_visible(timeout=30_000)
+    s.page.click(f"[data-use-doi='{NUMPY['doi']}']")
+    expect(s.page.locator(".tile.verified .big")).to_have_text("1 of 1")
+    text = results_text(s)
+    assert "DOI added by you" in text and "was chosen by you from a Crossref title search" in text
+    assert "It was not in your pasted reference" in text
+    assert s.page.locator(".candidates").count() == 0
+    assert s.errors == []
+
+
+def test_title_search_rate_limit_stops_and_changes_nothing(open_page: Any) -> None:
+    def limited(route: Any) -> None:
+        route.fulfill(
+            status=429, headers={"access-control-allow-origin": "*", "retry-after": "0"}, body=""
+        )
+
+    s = open_page(crossref=limited)
+    s.page.check("#search-on")
+    s.check(NO_DOI_BIB)
+    s.page.click("#search-go")
+    expect(s.page.locator("#search-panel")).to_contain_text("slow down", timeout=60_000)
+    assert s.page.locator(".candidates").count() == 0
+    expect(s.page.locator(".tile.no_verdict .big")).to_have_text("1 of 1")
+
+
+def test_title_search_skips_references_with_a_doi_or_no_title(open_page: Any) -> None:
+    s = open_page(crossref=search_reply([]))
+    s.page.check("#search-on")
+    load_sample(s, "sample-references-good.bib")
+    s.check()
+    expect(s.page.locator("#search-panel")).to_contain_text("Nothing to search for")
+    assert searches(s) == []

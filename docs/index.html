@@ -28,7 +28,7 @@
     <ul>
       <li>What you paste, any catalogue file you load, and the results are processed in this tab. They are not uploaded. There is no server, no account, no cookies and no analytics.</li>
       <li>When the page opens it downloads its own files and the Python engine (Pyodide, pinned to version <span id="pyodide-version">0.29.5</span>) from <code>cdn.jsdelivr.net</code>. Those downloads contain nothing you type.</li>
-      <li>One optional feature is <strong>off by default</strong>: a Crossref lookup (step 3). Only if you turn it on and press its send button are DOIs from your list sent to <code>api.crossref.org</code>, and the page lists exactly what will be sent first.</li>
+      <li>Two optional features are <strong>off by default</strong>: Crossref lookups in step 3. Only if you turn one on and press its send button does anything leave this tab: DOIs from your list, or (for the title search) the title, first author's family name and year of references that have no DOI. They go to <code>api.crossref.org</code>, and the page lists exactly what will be sent first.</li>
     </ul>
   </section>
 
@@ -104,7 +104,8 @@
     </section>
 
     <section class="panel" aria-labelledby="step3-h">
-      <h2 id="step3-h"><span class="step">3</span> Optional: Crossref lookup <span class="tag">off by default</span></h2>
+      <h2 id="step3-h"><span class="step">3</span> Optional: look things up on Crossref <span class="tag">off by default</span></h2>
+      <h3>Look up DOIs that are not in the catalogue</h3>
       <div class="choice">
         <input type="checkbox" id="crossref-on" aria-describedby="crossref-help">
         <label for="crossref-on">Let me look up DOIs that are not in the catalogue on Crossref</label>
@@ -116,6 +117,20 @@
           <li><strong>What Crossref can see anyway:</strong> your IP address and the usual request headers, as with any website, and which DOIs you asked about.</li>
           <li><strong>No email address or key is used</strong>, so requests go to Crossref's public pool, which is rate-limited. If Crossref asks the page to slow down, it stops and says so.</li>
           <li><strong>What comes back</strong> is added to the catalogue for that run only, labelled as a live Crossref lookup. CiteProof then compares as usual. A DOI that Crossref does not know is still &ldquo;not found&rdquo;, not &ldquo;wrong&rdquo;: other agencies, such as DataCite, register DOIs too.</li>
+        </ul>
+      </div>
+
+      <h3>Find possible DOIs for references that have none</h3>
+      <div class="choice">
+        <input type="checkbox" id="search-on" aria-describedby="search-help">
+        <label for="search-on">Help me find possible DOIs for references with no DOI (searches Crossref by title)</label>
+      </div>
+      <div id="search-help" class="help">
+        <p>This is a separate choice because it sends more than a DOI. Ticking the box sends nothing. After you press <em>Check references</em>, the page lists exactly what it would send for each reference and waits for a separate send button.</p>
+        <ul>
+          <li><strong>What is sent:</strong> for each reference with no DOI, its <strong>title, its first author's family name and its year</strong>, as part of a Crossref search address. These are your reference's own words, so they say more about your work than a DOI does.</li>
+          <li><strong>What comes back:</strong> up to three possible matches per reference. They are only suggestions. Nothing is chosen for you, and a reference's result does not change until you press <em>Use this DOI</em> on a match you have read and agree with. The card then says the DOI was added by you.</li>
+          <li>Crossref can also see your IP address and the usual request headers. No email address or key is used, so the public, rate-limited pool applies. If Crossref asks the page to slow down, it stops and says so.</li>
         </ul>
       </div>
     </section>

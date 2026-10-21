@@ -8,7 +8,10 @@ Nothing here is a verdict on a reference. Every result says what CiteProof compa
 
 - **What you paste stays in your browser tab.** The reference list, any catalogue file you load and the results are handled by JavaScript and Python running on your device. They are not uploaded, logged or stored. The page uses no cookies, no `localStorage`, no analytics and no third-party scripts besides Pyodide. Closing the tab discards everything; the *Clear* button empties the box sooner.
 - **What the page downloads when it opens:** its own files from wherever it is hosted (GitHub Pages, if you publish it there), and Pyodide from `cdn.jsdelivr.net`, pinned to version 0.29.5 and checked with a Subresource Integrity hash. Those requests carry no part of your list. As with any website, the host and the CDN can see ordinary connection data such as your IP address and which files you asked for. This project does not control that data.
-- **One optional feature can send data out, and it is off by default:** the Crossref lookup (step 3 on the page). Ticking its box sends nothing. After a check, the page lists the exact URLs it would fetch, `https://api.crossref.org/works/<DOI>`, and waits for a separate *Send* button. Only DOIs are sent, never titles, authors or the list. Crossref will also see your IP address and the usual request headers, and which DOIs you asked about. No email address, API key or cookie is used.
+- **Two optional features can send data out. Both are off by default and each has its own tick-box (step 3 on the page).** Ticking a box sends nothing. After a check, the page lists the exact addresses it would fetch and waits for a separate *Send* button.
+  - *DOI lookup:* for references whose DOI is not in the catalogue, `https://api.crossref.org/works/<DOI>`. Only DOIs are sent.
+  - *Title search for references with no DOI:* `https://api.crossref.org/works?query.bibliographic=<words>&rows=3&select=...`, where the words are that reference's **title, its first author's family name and its year**. That is more revealing than a DOI because it is the reference's own wording, which is why it is a separate choice. The rest of the list, the other authors and the journal are not sent.
+  - In both cases Crossref can also see your IP address and the usual request headers. No email address, API key or cookie is used.
 - **A Content-Security-Policy** in the page limits it to its own files, `cdn.jsdelivr.net` and `api.crossref.org`. A static policy cannot switch the Crossref allowance on and off, so it is always listed; the code only contacts Crossref after you press *Send*. An automated test records every request the page makes during a check and fails if one goes anywhere else, if any request carries a body, or if any text you pasted appears in a request.
 - **Downloads** (CSV, JSON) are built in your browser and saved by it. Reports can contain your references; read them before sharing.
 
@@ -32,8 +35,17 @@ The page has a "What this does not check" panel. In short: it does not decide wh
 - **The sample catalogue is tiny** (7 records) so that most real references will get no verdict. It exists so the demo works out of the box.
 - **Matching is by wording, not meaning**, as in CiteProof. A reference can match a real record and still be cited for the wrong reason.
 - **First load** downloads about 12 MB (Pyodide) and needs a browser with WebAssembly. There is no offline mode.
-- **The Crossref lookup has been tested only against mocked responses** (success, not found, rate-limited, unreachable), never against the live API. Titles from Crossref have markup tags removed and entities decoded before comparison. A DOI Crossref does not know may be registered with another agency, such as DataCite.
+- **Both Crossref features have been tested only against mocked responses** (success, not found, rate-limited, unreachable), never against the live API. The exact search address, including the `select` field list, is the part most worth checking against the live service. Titles from Crossref have markup tags removed and entities decoded before comparison. A DOI Crossref does not know may be registered with another agency, such as DataCite.
 - **CiteProof's `claims` command is not part of this demo.**
+
+## Finding a DOI when a reference has none
+
+CiteProof looks references up by DOI, and citations copied from Google Scholar usually have none. For references that get no verdict the page offers two things, neither of which changes a verdict by itself:
+
+1. **"Possible match by title (advisory)"**: if the catalogue holds a record with the same title. Local, nothing sent.
+2. **Title search on Crossref (optional, off by default):** up to three possible DOIs per reference, shown with their title, authors, year, journal and a title-similarity score. **Nothing is chosen automatically.** The reference stays at "no verdict" until the person presses *Use this DOI and check again* on a match they have read. CiteProof then compares the reference with that record as usual, and the card, the summary notice and the CSV all say the DOI was added by the person and was not in the pasted reference. A reference that already has a DOI is never changed.
+
+Some works have no DOI at all (many books, reports, web pages and older papers). For those, "no verdict" is the correct result.
 
 ## Sample data
 
@@ -69,7 +81,7 @@ ruff check . && ruff format --check . && pytest -q
 
 `pytest` runs CiteProof's own tests plus `tests/test_demo_logic.py`, which covers the demo's data handling and proves `docs/py/citeproof` is byte-identical to `src/citeproof`. CI runs these.
 
-The headless-browser tests (`tests/browser`) load the page in Chromium and cover a good list, a messy list, pasted text, an empty input, privacy (every request audited), a CDN failure, a tampered Pyodide file, catalogue upload, CSV export, the Crossref flows, keyboard-only use, a phone width and dark mode. They skip unless Playwright and Chromium are installed.
+The headless-browser tests (`tests/browser`) load the page in Chromium and cover a good list, a messy list, pasted text, an empty input, the title search, privacy (every request audited), a CDN failure, a tampered Pyodide file, catalogue upload, CSV export, the Crossref flows, keyboard-only use, a phone width and dark mode. They skip unless Playwright and Chromium are installed.
 
 ```bash
 pip install playwright               # use an installed Chromium, or: playwright install chromium

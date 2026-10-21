@@ -23,7 +23,7 @@ import re
 import sys
 from difflib import SequenceMatcher
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from text_references import parse_text_references
 
@@ -39,6 +39,9 @@ MAX_CATALOGUE_RECORDS = 50_000
 MAX_LOOKUPS = 25
 
 CROSSREF_WORKS = "https://api.crossref.org/works/"
+CROSSREF_SEARCH = "https://api.crossref.org/works?"
+SEARCH_FIELDS = "DOI,title,author,issued,container-title"
+MIN_SEARCH_TITLE = 12
 DOI_SHAPE = re.compile(r"^10\.\d{4,9}/\S+$")
 
 # CiteProof gives each reference exactly one of these as its comparison finding.
@@ -415,11 +418,16 @@ def _clean_name(name: Any) -> str:
     return str(name).strip()
 
 
-def _surname(name: Any) -> str:
+def _family_name(name: Any) -> str:
+    """The family name as written: 'Harris' from 'Harris, Charles R.' or 'Charles Harris'."""
     text = _clean_name(name)
     if "," in text:
-        return norm(text.split(",", 1)[0])
-    return norm(text.split()[-1]) if text.split() else ""
+        return text.split(",", 1)[0].strip()
+    return text.split()[-1] if text.split() else ""
+
+
+def _surname(name: Any) -> str:
+    return norm(_family_name(name))
 
 
 def _author_hint(mine: Any, theirs: Any) -> str:
@@ -546,6 +554,7 @@ def build_result(
     findings = report["findings"]
     refs: list[dict[str, Any]] = parsed["references"]
     read_info: dict[str, Any] = parsed.get("read") or {}
+    chosen: dict[str, str] = parsed.get("chosen") or {}
     rows: list[dict[str, Any]] = []
     counts = {"verified": 0, "metadata_mismatch": 0, "no_verdict": 0}
     flags_count = {
@@ -566,6 +575,16 @@ def build_result(
         doi = normalise_doi(ref.get("doi"))
         record = by_doi.get(doi) if doi else None
         evidence: list[dict[str, str]] = []
+        if ref["id"] in chosen:
+            evidence.append(
+                {
+                    "label": "DOI added by you",
+                    "value": (
+                        f"{chosen[ref['id']]} was chosen by you from a Crossref title search. "
+                        "It was not in your pasted reference."
+                    ),
+                }
+            )
         if verdict == "VERIFIED":
             headline = HEADLINES["VERIFIED"]
             evidence.append({"label": "Matched by DOI", "value": doi})
@@ -641,7 +660,8 @@ def build_result(
             {
                 "id": ref["id"],
                 "title": str(ref.get("title", "")),
-                "doi_as_given": str(ref.get("doi", "") or ""),
+                "doi_as_given": "" if ref["id"] in chosen else str(ref.get("doi", "") or ""),
+                "doi_chosen": ref["id"] in chosen,
                 "verdict": verdict,
                 "message": comparison["message"],
                 "headline": headline,
@@ -684,6 +704,7 @@ def build_result(
         "missing_references": missing,
         "notices": notices,
         "lookup": lookup_candidates(rows),
+        "search": search_plan(rows, refs),
         "report": report,
     }
 
@@ -693,10 +714,30 @@ def run_check(
     catalogue_records: list[dict[str, Any]] | None,
     catalogue_label: str,
     extra_records: list[dict[str, Any]] | None = None,
+    doi_overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Check pasted references against a catalogue with CiteProof. Raises DemoError."""
+    """Check pasted references against a catalogue with CiteProof. Raises DemoError.
+
+    `doi_overrides` maps a reference id to a DOI the person chose after a Crossref title search.
+    It only applies to references that have no DOI of their own.
+    """
     parsed = parse_references(references_text)
     notices = list(parsed.pop("notices"))
+    if doi_overrides and isinstance(parsed["references"], list):
+        chosen: dict[str, str] = {}
+        references = []
+        for ref in parsed["references"]:
+            doi = doi_overrides.get(ref.get("id")) if isinstance(ref, dict) else None
+            if doi and DOI_SHAPE.match(normalise_doi(doi)) and not normalise_doi(ref.get("doi")):
+                ref = {**ref, "doi": doi}
+                chosen[ref["id"]] = normalise_doi(doi)
+            references.append(ref)
+        parsed["references"], parsed["chosen"] = references, chosen
+        if chosen:
+            notices.append(
+                f"{len(chosen)} DOI(s) were added by you from a Crossref title search. "
+                "They are marked on the cards; they were not in your pasted references."
+            )
     embedded = parsed["catalogue"]
     if embedded is not None:
         records = embedded
@@ -819,7 +860,7 @@ def _clean_text(value: Any) -> str:
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", str(value)))).strip()
 
 
-def crossref_to_record(payload: Any, fetched_on: str) -> dict[str, Any]:
+def crossref_to_record(payload: Any, fetched_on: str, via: str = "DOI lookup") -> dict[str, Any]:
     """Map a Crossref /works/{doi} response to a catalogue record. Raises DemoError."""
     message = payload.get("message") if isinstance(payload, dict) else None
     if not isinstance(message, dict) or not isinstance(message.get("DOI"), str):
@@ -853,10 +894,93 @@ def crossref_to_record(payload: Any, fetched_on: str) -> dict[str, Any]:
     if isinstance(containers, list) and containers and _clean_text(containers[0]):
         record["journal"] = _clean_text(containers[0])
     record["provenance"] = (
-        f"Crossref REST API (api.crossref.org/works/{doi}), fetched live from your browser on "
-        f"{fetched_on}; retraction status was not read from this response"
+        f"Crossref REST API ({via}; api.crossref.org/works/{doi}), fetched live from your browser "
+        f"on {fetched_on}; retraction status was not read from this response"
     )
     return record
+
+
+def search_query(ref: dict[str, Any]) -> str | None:
+    """The words a title search would send for one reference, or None if it has no usable title."""
+    title = _clean_text(ref.get("title", ""))
+    if len(title) < MIN_SEARCH_TITLE:
+        return None
+    authors = ref.get("authors")
+    first = authors[0] if isinstance(authors, list) and authors else authors
+    surname = _family_name(first) if isinstance(first, str) and first.strip() else ""
+    year = re.search(r"\d{4}", str(ref.get("year", "")))
+    return " ".join(part for part in (title, surname, year.group() if year else "") if part)
+
+
+def crossref_search_url(query: str) -> str:
+    """The one URL a title search fetches. Shown to the person before anything is sent."""
+    params = {"query.bibliographic": query, "rows": 3, "select": SEARCH_FIELDS}
+    return CROSSREF_SEARCH + urlencode(params, quote_via=quote)
+
+
+def search_plan(rows: list[dict[str, Any]], refs: list[dict[str, Any]]) -> dict[str, Any]:
+    """References with no DOI that a title search could try, and the ones it cannot."""
+    by_id = {r["id"]: r for r in refs}
+    items, unreadable = [], []
+    for row in rows:
+        if row["verdict"] != "NEEDS_REVIEW" or row["doi_as_given"].strip() or row["doi_chosen"]:
+            continue
+        query = search_query(by_id[row["id"]])
+        if query is None:
+            unreadable.append(row["id"])
+        else:
+            ref = by_id[row["id"]]
+            items.append(
+                {
+                    "id": row["id"],
+                    "title": _clean_text(ref.get("title", "")),
+                    "year": _year_of(ref.get("year", "")),
+                    "query": query,
+                    "url": crossref_search_url(query),
+                }
+            )
+    return {
+        "items": items[:MAX_LOOKUPS],
+        "truncated": max(0, len(items) - MAX_LOOKUPS),
+        "unreadable": unreadable,
+    }
+
+
+def crossref_candidates(
+    payload: Any, title: str, year: str, fetched_on: str
+) -> list[dict[str, Any]]:
+    """Possible DOIs from a Crossref search reply. Suggestions only: nothing is chosen here."""
+    message = payload.get("message") if isinstance(payload, dict) else None
+    items = message.get("items") if isinstance(message, dict) else None
+    if not isinstance(items, list):
+        raise DemoError(
+            "Crossref sent something unexpected", "The search reply had no list of results."
+        )
+    found = []
+    for item in items:
+        try:
+            record = crossref_to_record({"message": item}, fetched_on, via="title search")
+        except DemoError:
+            continue
+        ratio = SequenceMatcher(None, norm(title), norm(record.get("title", ""))).ratio()
+        found.append(
+            {
+                "doi": record["doi"],
+                "title": record.get("title", "(no title)"),
+                "authors": _show(record.get("authors", []), limit=4) or "(no authors listed)",
+                "year": record.get("year", "year not given"),
+                "journal": record.get("journal", "journal not given"),
+                "title_similarity": round(ratio, 3),
+                "year_matches": bool(year) and record.get("year") == _year_of(year),
+                "record": record,
+            }
+        )
+    return sorted(found, key=lambda c: c["title_similarity"], reverse=True)[:3]
+
+
+def _year_of(value: Any) -> str:
+    match = re.search(r"\d{4}", str(value))
+    return match.group() if match else ""
 
 
 # --------------------------------------------------------------------------- bridge for the page
@@ -880,12 +1004,17 @@ def api_parse_catalogue(text: str, filename: str) -> str:
 
 
 def api_check(
-    references_text: str, catalogue_json: str, catalogue_label: str, extra_json: str
+    references_text: str,
+    catalogue_json: str,
+    catalogue_label: str,
+    extra_json: str,
+    overrides_json: str = "",
 ) -> str:
     def call() -> dict[str, Any]:
         records = json.loads(catalogue_json) if catalogue_json else None
         extras = json.loads(extra_json) if extra_json else None
-        result = run_check(references_text, records, catalogue_label, extras)
+        overrides = json.loads(overrides_json) if overrides_json else None
+        result = run_check(references_text, records, catalogue_label, extras, overrides)
         result.pop("ok")
         return result
 
@@ -894,6 +1023,14 @@ def api_check(
 
 def api_crossref_record(response_json: str, fetched_on: str) -> str:
     return _wrap(lambda: {"record": crossref_to_record(json.loads(response_json), fetched_on)})
+
+
+def api_crossref_candidates(response_json: str, title: str, year: str, fetched_on: str) -> str:
+    return _wrap(
+        lambda: {
+            "candidates": crossref_candidates(json.loads(response_json), title, year, fetched_on)
+        }
+    )
 
 
 def api_csv(result_json: str) -> str:

@@ -709,3 +709,153 @@ def test_text_input_is_cited_note_and_never_says_verified_without_citeproof() ->
     )
     assert direct["findings"] == []  # sanity: building blocks are CiteProof's own
     assert any("Plain text" in n and "not part of CiteProof" in n for n in result["notices"])
+
+
+# ---------------------------------------------------------------- finding DOIs by title (optional)
+
+NUMPY = CATALOGUE[0]
+NUMPY_NO_DOI = GOOD.split("@article")[1].replace(f"  doi = {{{NUMPY['doi']}}},\n", "")
+
+
+def numpy_bib_without_doi() -> str:
+    entry = "@article" + NUMPY_NO_DOI
+    assert "doi" not in entry.lower()
+    return entry
+
+
+def crossref_item(record: dict[str, Any], **changes: Any) -> dict[str, Any]:
+    """A Crossref work item for a catalogue record."""
+    authors = []
+    for name in record["authors"]:
+        family, _, given = name.partition(",")
+        authors.append({"family": family.strip(), "given": given.strip()})
+    item = {
+        "DOI": record["doi"],
+        "title": [record["title"]],
+        "author": authors,
+        "issued": {"date-parts": [[int(record["year"])]]},
+        "container-title": [record["journal"]],
+    }
+    return {**item, **changes}
+
+
+def test_search_query_is_title_first_author_surname_and_year() -> None:
+    ref = {
+        "id": "a",
+        "title": "Array programming with NumPy",
+        "authors": ["Harris, Charles R."],
+        "year": "2020",
+    }
+    assert demo.search_query(ref) == "Array programming with NumPy Harris 2020"
+    assert (
+        demo.search_query({"id": "a", "title": "Array programming with NumPy"})
+        == "Array programming with NumPy"
+    )
+    assert demo.search_query({"id": "a", "title": "Short"}) is None
+    assert demo.search_query({"id": "a"}) is None
+
+
+def test_search_url_is_one_fixed_shape_with_everything_encoded() -> None:
+    url = demo.crossref_search_url('A "quoted" title & more? #1')
+    assert url.startswith("https://api.crossref.org/works?query.bibliographic=")
+    assert "rows=3" in url and "select=DOI%2Ctitle%2Cauthor%2Cissued%2Ccontainer-title" in url
+    assert " " not in url and '"' not in url and "#" not in url and "&more" not in url
+    assert "mailto" not in url
+
+
+def test_search_plan_lists_only_unresolved_references_without_a_doi() -> None:
+    result = check(MESSY.replace("doi = {10.9999/demo.invented-001},", ""), CATALOGUE)
+    plan = result["search"]
+    assert [i["id"] for i in plan["items"]] == ["pedregosa2011", "invented2026"]
+    assert plan["unreadable"] == []
+    assert all(i["url"].startswith("https://api.crossref.org/works?") for i in plan["items"])
+    # A reference whose DOI is merely absent from the catalogue is the DOI lookup's job, not search.
+    assert "wilkinson2016" not in [i["id"] for i in plan["items"]]
+
+
+def test_search_plan_reports_references_it_cannot_search() -> None:
+    result = check(TEXT, CATALOGUE)
+    plan = result["search"]
+    assert "ref6" in plan["unreadable"]  # the unreadable notes line has no title
+    assert "ref2" in [i["id"] for i in plan["items"]]
+
+
+def test_candidates_are_ranked_never_chosen_and_keep_the_record() -> None:
+    other = {
+        **NUMPY,
+        "doi": "10.5555/other",
+        "title": "Array programming in Python",
+        "year": "2019",
+    }
+    payload = {
+        "message": {"items": [crossref_item(other), crossref_item(NUMPY), {"title": ["no doi"]}]}
+    }
+    found = demo.crossref_candidates(payload, NUMPY["title"], "2020", "2026-10-21")
+    assert [c["doi"] for c in found] == [NUMPY["doi"], "10.5555/other"]
+    assert found[0]["title_similarity"] == 1.0 and found[0]["year_matches"] is True
+    assert found[1]["year_matches"] is False
+    assert found[0]["record"]["provenance"].startswith("Crossref REST API (title search")
+    assert "retracted" not in found[0]["record"]
+
+
+def test_unexpected_search_replies_are_rejected_readably() -> None:
+    for payload in (None, {}, {"message": {}}, {"message": {"items": "x"}}):
+        with pytest.raises(demo.DemoError) as caught:
+            demo.crossref_candidates(payload, "A long enough title", "2020", "2026-10-21")
+        assert caught.value.title == "Crossref sent something unexpected"
+
+
+def test_a_doi_the_person_chose_is_checked_by_citeproof_and_labelled() -> None:
+    bib = numpy_bib_without_doi()
+    before = check(bib, CATALOGUE)["rows"][0]
+    assert before["verdict"] == "NEEDS_REVIEW" and before["doi_chosen"] is False
+    chosen = demo.crossref_candidates(
+        {"message": {"items": [crossref_item(NUMPY)]}}, NUMPY["title"], "2020", "2026-10-21"
+    )[0]
+    after = check(bib, CATALOGUE, doi_overrides={"harris2020": chosen["doi"]})
+    row = after["rows"][0]
+    assert row["verdict"] == "VERIFIED" and row["doi_chosen"] is True
+    assert row["doi_as_given"] == ""  # the export never pretends the DOI was in the pasted text
+    assert row["evidence"][0]["label"] == "DOI added by you"
+    assert "Crossref title search" in row["evidence"][0]["value"]
+    assert any("added by you" in n for n in after["notices"])
+    assert after["search"]["items"] == []  # nothing left to search for
+
+
+def test_a_chosen_doi_is_still_compared_and_can_still_mismatch() -> None:
+    bib = numpy_bib_without_doi()
+    wrong = {
+        **NUMPY,
+        "doi": "10.5555/other",
+        "title": "Array programming in Python",
+        "year": "2019",
+    }
+    row = check(
+        bib,
+        CATALOGUE,
+        extra_records=[demo.crossref_to_record({"message": crossref_item(wrong)}, "2026-10-21")],
+        doi_overrides={"harris2020": "10.5555/other"},
+    )["rows"][0]
+    assert row["verdict"] == "METADATA_MISMATCH"
+
+
+def test_a_reference_keeps_its_own_doi_and_bad_overrides_are_ignored() -> None:
+    with_doi = check(GOOD, CATALOGUE, doi_overrides={"harris2020": "10.5555/other"})
+    assert set(verdicts(with_doi).values()) == {"VERIFIED"}
+    assert not any(r["doi_chosen"] for r in with_doi["rows"])
+    bib = numpy_bib_without_doi()
+    for bad in ("not a doi", "10.1/x", "", "https://example.com/10.5555/x y"):
+        assert (
+            check(bib, CATALOGUE, doi_overrides={"harris2020": bad})["rows"][0]["doi_chosen"]
+            is False
+        )
+    assert (
+        check(bib, CATALOGUE, doi_overrides={"nobody": NUMPY["doi"]})["rows"][0]["doi_chosen"]
+        is False
+    )
+
+
+def test_csv_export_marks_a_chosen_doi() -> None:
+    result = check(numpy_bib_without_doi(), CATALOGUE, doi_overrides={"harris2020": NUMPY["doi"]})
+    row = read_csv(demo.results_to_csv(result))[0]
+    assert row["doi_as_given"] == "" and "DOI added by you" in row["evidence"]
