@@ -21,8 +21,7 @@ const state = {
   file: null, // { label, records, notices } for the student's own catalogue file
   result: null,
   lookupAbort: null,
-  lookupLog: null,
-  searchLog: null,
+  online: null, // progress and log of the Crossref lookups for this result
   extra: [], // catalogue records added from Crossref for this result
   overrides: {}, // reference id -> DOI the person chose from a title search
   candidates: {}, // reference id -> possible DOIs from a title search (suggestions)
@@ -324,6 +323,7 @@ function renderResult(result) {
       seg.style.flexGrow = String(s[k].count);
       return seg;
     })),
+    s.metadata_mismatch.only_given_names ? h("p", { class: "flags-line", text: `${s.metadata_mismatch.only_given_names} of the ${s.metadata_mismatch.count} mismatch${s.metadata_mismatch.count === 1 ? "" : "es"} differ only in how given names are written (initials or full names).` }) : null,
     extra ? h("p", { class: "flags-line", text: extra }) : null,
     h("details", { class: "legend how" },
       h("summary", { text: "What do these mean?" }),
@@ -350,8 +350,7 @@ function renderResult(result) {
   for (const button of body.querySelectorAll("[data-use-doi]")) {
     button.addEventListener("click", () => useCandidate(button.dataset.ref, button.dataset.useDoi));
   }
-  renderSearchPanel(result);
-  renderLookupPanel(result);
+  renderOnlinePanel();
 }
 
 function showResults(node, heading = "Results") {
@@ -374,7 +373,7 @@ function download(name, type, text) {
 
 /* ---------- running a check ---------- */
 
-function runCheck() {
+function runCheck({ focus = true } = {}) {
   const catalogue = chosenCatalogue();
   if (!catalogue) {
     showResults(renderError({
@@ -394,51 +393,22 @@ function runCheck() {
   }
   state.result = out;
   renderResult(out);
-  showResults(null);
+  if (focus) showResults(null);
   return out;
 }
 
 async function onSubmit(event) {
   event.preventDefault();
   if (!state.demo) return;
-  state.lookupLog = null;
-  state.searchLog = null;
+  state.online = null;
   state.extra = [];
   state.overrides = {};
   state.candidates = {};
-  runCheck();
+  const first = runCheck();
+  if (first) await runOnline();
 }
 
-/* ---------- optional Crossref lookup ---------- */
-
-function renderLookupPanel(result) {
-  const old = $("lookup-panel");
-  if (old) old.remove();
-  if (!$("crossref-on").checked) return;
-  const { items, truncated, unusable } = result.lookup;
-  const panel = h("section", { class: "lookup", id: "lookup-panel", "aria-labelledby": "lookup-h" });
-  panel.append(h("h3", { id: "lookup-h", text: "Crossref DOI lookup" }));
-  if (state.lookupLog) {
-    panel.append(h("p", { text: "What happened:" }),
-      h("ul", {}, state.lookupLog.map((l) => h("li", {}, h("code", { text: l.doi }), ` — ${l.text}`))));
-  }
-  if (items.length && !state.lookupLog) {
-    panel.append(
-      h("p", {}, `Nothing has been sent. Pressing Send makes ${items.length} request${items.length === 1 ? "" : "s"} to api.crossref.org, one at a time, to exactly these addresses:`),
-      h("ul", {}, items.map((i) => h("li", {}, h("code", { text: i.url })))),
-      h("div", { class: "exports" },
-        h("button", { type: "button", class: "btn", id: "lookup-go" }, `Send ${items.length} request${items.length === 1 ? "" : "s"}`),
-        h("button", { type: "button", class: "btn", id: "lookup-cancel", hidden: true }, "Stop")),
-      h("p", { id: "lookup-progress", class: "hint", role: "status", "aria-live": "polite" }));
-  } else if (!items.length && !state.lookupLog) {
-    panel.append(h("p", { text: "Nothing to look up: every DOI is already in the catalogue, or none has one. Nothing was sent." }));
-  }
-  if (truncated) panel.append(h("p", { class: "notice", text: `${truncated} more DOI(s) are not shown. The demo looks up at most 25 at a time.` }));
-  if (unusable.length) panel.append(h("p", { class: "notice", text: `Not sent, because they do not look like DOIs: ${unusable.join(", ")}` }));
-  $("results-body").prepend(panel);
-  const go = $("lookup-go");
-  if (go) go.addEventListener("click", () => doLookup(items));
-}
+/* ---------- Crossref lookups (on by default, switchable) ---------- */
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -477,116 +447,120 @@ const OUTCOME_TEXT = {
   rate_limited: "Crossref asked this page to slow down (HTTP 429), so it stopped. Wait a minute and try again.",
   timeout: "Crossref did not answer in time.",
   network: "Could not reach Crossref (you may be offline, or something is blocking it).",
-  stopped: "Stopped by you before this was sent.",
+  stopped: "Stopped by you.",
 };
+const STOPPERS = ["rate_limited", "network", "stopped"];
 
-async function doLookup(items) {
+function setProgress(text) {
+  const node = $("online-progress");
+  if (node) node.textContent = text;
+}
+
+/* One run: DOI lookups first (they can change the result), then title searches. */
+async function runOnline() {
+  const doiOn = $("crossref-on").checked;
+  const searchOn = $("search-on").checked;
+  if (!state.demo || !state.result || (!doiOn && !searchOn)) return;
   const abort = new AbortController();
   state.lookupAbort = abort;
-  $("lookup-go").disabled = true;
-  $("lookup-cancel").hidden = false;
-  $("lookup-cancel").addEventListener("click", () => abort.abort());
-  const log = [];
+  state.online = { running: true, log: [], sent: [] };
+  renderResult(state.result);
   let halted = false;
-  for (let i = 0; i < items.length; i++) {
-    const { doi, url } = items[i];
+
+  const doiItems = doiOn ? state.result.lookup.items : [];
+  for (let i = 0; i < doiItems.length; i++) {
+    const { doi, url } = doiItems[i];
     if (halted || abort.signal.aborted) {
-      log.push({ doi, text: "Not looked up. Nothing was sent for this DOI." });
+      state.online.log.push({ who: doi, text: "Not looked up. Nothing was sent for this DOI." });
       continue;
     }
-    $("lookup-progress").textContent = `Looking up ${i + 1} of ${items.length}…`;
+    setProgress(`Looking up DOI ${i + 1} of ${doiItems.length}…`);
+    state.online.sent.push(url);
     const outcome = await fetchCrossref(url, abort.signal);
     if (outcome.kind === "ok") {
       const mapped = call("api_crossref_record", JSON.stringify(outcome.json), new Date().toISOString().slice(0, 10));
       if (mapped.ok) {
         state.extra.push(mapped.record);
-        log.push({ doi, text: "Crossref returned a record. It was added to the catalogue for this run." });
+        state.online.log.push({ who: doi, text: "Crossref returned a record. It was added to the comparison for this run." });
       } else {
-        log.push({ doi, text: `${mapped.error.title}. ${mapped.error.message}` });
+        state.online.log.push({ who: doi, text: `${mapped.error.title}. ${mapped.error.message}` });
       }
     } else if (outcome.kind === "http") {
-      log.push({ doi, text: `Crossref answered with HTTP ${outcome.status}, so nothing was added.` });
+      state.online.log.push({ who: doi, text: `Crossref answered with HTTP ${outcome.status}, so nothing was added.` });
     } else {
-      log.push({ doi, text: OUTCOME_TEXT[outcome.kind] });
-      if (["rate_limited", "network", "stopped"].includes(outcome.kind)) halted = true;
+      state.online.log.push({ who: doi, text: OUTCOME_TEXT[outcome.kind] });
+      if (STOPPERS.includes(outcome.kind)) halted = true;
     }
-    if (i < items.length - 1 && !halted) await sleep(LOOKUP_GAP_MS);
+    if (i < doiItems.length - 1 && !halted) await sleep(LOOKUP_GAP_MS);
   }
-  state.lookupAbort = null;
-  state.lookupLog = log;
-  const result = runCheck();
-  if (result) $("results-h").textContent = "Results (with Crossref lookup)";
-}
+  if (state.extra.length) runCheck({ focus: false });
 
-/* ---------- optional title search for references with no DOI ---------- */
-
-function renderSearchPanel(result) {
-  const old = $("search-panel");
-  if (old) old.remove();
-  if (!$("search-on").checked) return;
-  const { items, truncated, unreadable } = result.search;
-  const panel = h("section", { class: "lookup", id: "search-panel", "aria-labelledby": "search-h" });
-  panel.append(h("h3", { id: "search-h", text: "Find possible DOIs by title" }));
-  if (state.searchLog) {
-    panel.append(h("p", { text: "What happened:" }),
-      h("ul", {}, state.searchLog.map((l) => h("li", {}, h("code", { text: l.id }), ` \u2014 ${l.text}`))));
-  } else if (items.length) {
-    panel.append(
-      h("p", {}, `Nothing has been sent. Pressing Send makes ${items.length} search${items.length === 1 ? "" : "es"} on api.crossref.org, one at a time. Each sends only these words:`),
-      h("ul", {}, items.map((i) => h("li", {},
-        h("strong", { text: `${i.id}: ` }), `\u201c${i.query}\u201d`, h("br"), h("code", { text: i.url })))),
-      h("div", { class: "exports" },
-        h("button", { type: "button", class: "btn", id: "search-go" }, `Send ${items.length} search${items.length === 1 ? "" : "es"}`),
-        h("button", { type: "button", class: "btn", id: "search-cancel", hidden: true }, "Stop")),
-      h("p", { id: "search-progress", class: "hint", role: "status", "aria-live": "polite" }));
-  } else {
-    panel.append(h("p", { text: "Nothing to search for: every reference has a DOI or no readable title. Nothing was sent." }));
-  }
-  if (truncated) panel.append(h("p", { class: "notice", text: `${truncated} more reference(s) are not shown. The demo searches at most 25 at a time.` }));
-  if (unreadable.length) panel.append(h("p", { class: "notice", text: `Not searched, because no usable title could be read: ${unreadable.join(", ")}` }));
-  $("results-body").prepend(panel);
-  const go = $("search-go");
-  if (go) go.addEventListener("click", () => doSearch(items));
-}
-
-async function doSearch(items) {
-  const abort = new AbortController();
-  $("search-go").disabled = true;
-  $("search-cancel").hidden = false;
-  $("search-cancel").addEventListener("click", () => abort.abort());
-  const log = [];
-  let halted = false;
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
+  const searchItems = searchOn ? state.result.search.items : [];
+  for (let i = 0; i < searchItems.length; i++) {
+    const item = searchItems[i];
     if (halted || abort.signal.aborted) {
-      log.push({ id: item.id, text: "Not searched. Nothing was sent for this reference." });
+      state.online.log.push({ who: item.id, text: "Not searched. Nothing was sent for this reference." });
       continue;
     }
-    $("search-progress").textContent = `Searching ${i + 1} of ${items.length}\u2026`;
+    setProgress(`Searching for a DOI ${i + 1} of ${searchItems.length}…`);
+    state.online.sent.push(item.url);
     const outcome = await fetchCrossref(item.url, abort.signal);
     if (outcome.kind === "ok") {
       const mapped = call("api_crossref_candidates", JSON.stringify(outcome.json), item.title, item.year,
         new Date().toISOString().slice(0, 10));
       if (mapped.ok) {
         state.candidates[item.id] = mapped.candidates;
-        log.push({ id: item.id, text: mapped.candidates.length ? `${mapped.candidates.length} possible match(es) are shown on its card. Nothing has been chosen.` : "Crossref returned no possible matches." });
+        state.online.log.push({ who: item.id, text: mapped.candidates.length ? `${mapped.candidates.length} possible DOI${mapped.candidates.length === 1 ? " is" : "s are"} shown on its card. Nothing has been chosen.` : "Crossref returned no possible matches." });
       } else {
-        log.push({ id: item.id, text: `${mapped.error.title}. ${mapped.error.message}` });
+        state.online.log.push({ who: item.id, text: `${mapped.error.title}. ${mapped.error.message}` });
       }
     } else if (outcome.kind === "http") {
-      log.push({ id: item.id, text: `Crossref answered with HTTP ${outcome.status}, so there are no suggestions.` });
+      state.online.log.push({ who: item.id, text: `Crossref answered with HTTP ${outcome.status}, so there are no suggestions.` });
     } else {
-      log.push({ id: item.id, text: outcome.kind === "not_found" ? "Crossref returned no possible matches." : OUTCOME_TEXT[outcome.kind] });
-      if (["rate_limited", "network", "stopped"].includes(outcome.kind)) halted = true;
+      state.online.log.push({ who: item.id, text: outcome.kind === "not_found" ? "Crossref returned no possible matches." : OUTCOME_TEXT[outcome.kind] });
+      if (STOPPERS.includes(outcome.kind)) halted = true;
     }
-    if (i < items.length - 1 && !halted) await sleep(LOOKUP_GAP_MS);
+    if (i < searchItems.length - 1 && !halted) await sleep(LOOKUP_GAP_MS);
   }
-  state.searchLog = log;
+  state.lookupAbort = null;
+  state.online.running = false;
+  state.online.halted = halted;
   renderResult(state.result);
-  $("results-h").textContent = "Results (with Crossref title search)";
-  $("results-h").focus({ preventScroll: true });
-  const first = document.querySelector(".candidates");
-  if (first) first.scrollIntoView({ block: "center" });
+}
+
+function renderOnlinePanel() {
+  const old = $("online-panel");
+  if (old) old.remove();
+  const online = state.online;
+  if (!online) return;
+  const panel = h("section", { class: "lookup", id: "online-panel", "aria-labelledby": "online-h" });
+  panel.append(h("h3", { id: "online-h", text: online.running ? "Looking things up on Crossref…" : "Crossref lookups" }));
+  if (online.running) {
+    panel.append(
+      h("p", { id: "online-progress", class: "hint", role: "status", "aria-live": "polite", text: "Starting…" }),
+      h("button", { type: "button", class: "btn small", id: "online-stop" }, "Stop"));
+  } else if (!online.log.length) {
+    panel.append(h("p", { class: "hint", text: "Nothing needed looking up. Nothing was sent." }));
+  } else {
+    panel.append(h("ul", {}, online.log.map((l) => h("li", {}, h("code", { text: l.who }), ` — ${l.text}`))));
+    if (online.sent.length) {
+      panel.append(h("details", { class: "how" },
+        h("summary", { text: `Exactly what was sent (${online.sent.length} request${online.sent.length === 1 ? "" : "s"})` }),
+        h("ul", {}, online.sent.map((u) => h("li", {}, h("code", { text: u }))))));
+    }
+    if (online.halted) {
+      panel.append(h("button", { type: "button", class: "btn small", id: "online-retry" }, "Try the lookups again"));
+    }
+  }
+  const { truncated } = state.result.lookup;
+  if (!online.running && (truncated || state.result.search.truncated)) {
+    panel.append(h("p", { class: "notice", text: "The demo looks up at most 25 at a time. Check a smaller batch for the rest." }));
+  }
+  $("results-body").prepend(panel);
+  const stop = $("online-stop");
+  if (stop) stop.addEventListener("click", () => state.lookupAbort && state.lookupAbort.abort());
+  const retry = $("online-retry");
+  if (retry) retry.addEventListener("click", () => runOnline());
 }
 
 /* ---------- wiring ---------- */
@@ -604,8 +578,6 @@ function init() {
   $("cat-file").addEventListener("change", syncCatalogueChoice);
   $("clear-refs").addEventListener("click", () => { $("refs").value = ""; $("refs").focus(); });
   $("retry-engine").addEventListener("click", startEngine);
-  $("crossref-on").addEventListener("change", () => { if (state.result) renderLookupPanel(state.result); });
-  $("search-on").addEventListener("change", () => { if (state.result) renderSearchPanel(state.result); });
   for (const button of document.querySelectorAll("[data-sample]")) {
     button.addEventListener("click", async () => {
       try {

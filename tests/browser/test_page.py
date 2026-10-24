@@ -30,14 +30,6 @@ def results_text(session: Any) -> str:
     return session.page.text_content("#results-body")
 
 
-def tick(session: Any, box: str) -> None:
-    """Open "Optional: look things up online" like a person would, then tick a box."""
-    online = session.page.locator("#online")
-    if online.get_attribute("open") is None:
-        online.locator("summary").first.click()
-    session.page.check(box)
-
-
 def load_sample(session: Any, name: str) -> None:
     session.page.click(f"[data-sample='data/{name}']")
     expect(session.page.locator("#refs")).not_to_have_value("")
@@ -126,6 +118,8 @@ def test_pasted_text_example(open_page: Any, shot: Any) -> None:
     assert text.count("Possible match by title (advisory)") == 2
     assert "did not change the verdict" in text
     assert "initials" in text and "shortened list" in text
+    assert "Only the authors' given names differ" in text
+    assert "1 of the 2 mismatches differ only in how given names are written" in text
     reads = page.locator("details.more")
     assert reads.count() == 7
     reads.first.locator("summary").click()
@@ -286,70 +280,68 @@ def crossref_ok(route: Any) -> None:
         route.fulfill(status=404, headers=headers, body="Resource not found.")
 
 
-def test_crossref_is_off_by_default_and_sends_nothing(open_page: Any) -> None:
-    s = open_page(crossref=crossref_ok)
-    assert not s.page.locator("#crossref-on").is_checked()
+def test_crossref_is_on_by_default_and_visible(open_page: Any) -> None:
+    s = open_page(online=True)
+    for box in ("#crossref-on", "#search-on"):
+        assert s.page.locator(box).is_checked() and s.page.locator(box).is_visible()
+    expect(s.page.locator("#online")).to_contain_text("Sends only the DOI")
+    expect(s.page.locator("#online")).to_contain_text("title, first author's family name and year")
+
+
+def test_switching_both_off_sends_nothing(open_page: Any) -> None:
+    s = open_page(crossref=crossref_ok)  # online=False unticks both
     load_sample(s, "sample-references-messy.bib")
     s.check()
     expect(s.page.locator(".tile")).to_have_count(3)
-    assert s.page.locator("#lookup-panel").count() == 0
+    assert s.page.locator("#online-panel").count() == 0
     assert not any("crossref" in r.url for r in s.requests)
 
 
-def test_crossref_needs_a_second_explicit_step_and_shows_what_is_sent(
+def test_crossref_runs_automatically_and_shows_exactly_what_was_sent(
     open_page: Any, shot: Any
 ) -> None:
-    s = open_page(crossref=crossref_ok)
+    s = open_page(crossref=crossref_ok, online=True)
     load_sample(s, "sample-references-messy.bib")
-    tick(s, "#crossref-on")
-    s.check()
-    panel = s.page.locator("#lookup-panel")
-    expect(panel).to_contain_text("Nothing has been sent")
-    expect(panel).to_contain_text("https://api.crossref.org/works/10.1038/sdata.2016.18")
-    expect(panel).to_contain_text("https://api.crossref.org/works/10.9999/demo.invented-001")
-    assert not any("crossref" in r.url for r in s.requests)  # ticking and checking sent nothing
-    assert "@" not in panel.inner_text()  # no email address anywhere in what is sent
-    s.page.click("#lookup-go")
-    expect(s.page.locator("#results-h")).to_have_text(
-        "Results (with Crossref lookup)", timeout=30_000
-    )
+    s.check()  # one click: no second "send" step
+    log = s.page.locator("#online-panel")
+    expect(log).to_contain_text("Crossref returned a record", timeout=60_000)
+    expect(s.page.locator("#online-progress")).to_have_count(0, timeout=60_000)
     sent = [r for r in s.requests if "crossref" in r.url]
-    assert sorted(r.url for r in sent) == [
-        "https://api.crossref.org/works/10.1038/sdata.2016.18",
-        "https://api.crossref.org/works/10.9999/demo.invented-001",
-    ]
     assert all(r.method == "GET" and not r.post_data for r in sent)
     assert all("mailto" not in r.url and "cookie" not in r.headers for r in sent)
+    urls = sorted(r.url for r in sent)
+    assert "https://api.crossref.org/works/10.1038/sdata.2016.18" in urls
+    assert "https://api.crossref.org/works/10.9999/demo.invented-001" in urls
+    searches_sent = [u for u in urls if "query.bibliographic" in u]
+    assert len(searches_sent) == 1  # only pedregosa2011 has no DOI
+    assert "Scikit-learn" in searches_sent[0] and "Pedregosa" in searches_sent[0]
+    for leaked in ("Journal of Machine Learning Research", "Varoquaux", "Michel"):
+        assert leaked not in searches_sent[0]
     text = results_text(s)
-    assert "Crossref returned a record" in text
     assert "Crossref has no record for this DOI" in text and "not proof it does not exist" in text
-    # The FAIR paper moves from "no verdict" to a comparison. CiteProof then flags its authors
-    # ("Wilkinson ... and others" is not the full list), so the result is a mismatch, not a pass.
+    assert f"Exactly what was sent ({len(sent)} request" in text
+    assert "from Crossref" in s.page.inner_text(".meta")
+    # The FAIR paper moves from "no verdict" to a comparison, and CiteProof flags its authors
+    # ("Wilkinson ... and others" is not the full list), so it is a mismatch, not a pass.
     expect(s.page.locator(".tile.verified .big")).to_have_text("4 of 10")
     expect(s.page.locator(".tile.metadata_mismatch .big")).to_have_text("4 of 10")
     expect(s.page.locator(".tile.no_verdict .big")).to_have_text("2 of 10")
-    assert "Crossref record" in text and "Crossref REST API" in text
     shot(s.page, "crossref-after-lookup-desktop-light")
 
 
 def test_crossref_rate_limit_stops_politely(open_page: Any) -> None:
     def limited(route: Any) -> None:
         route.fulfill(
-            status=429,
-            headers={"access-control-allow-origin": "*", "retry-after": "0"},
-            body="slow down",
+            status=429, headers={"access-control-allow-origin": "*", "retry-after": "0"}, body=""
         )
 
-    s = open_page(crossref=limited)
+    s = open_page(crossref=limited, online=True)
     load_sample(s, "sample-references-messy.bib")
-    tick(s, "#crossref-on")
     s.check()
-    s.page.click("#lookup-go")
-    expect(s.page.locator("#lookup-panel")).to_contain_text(
-        "asked this page to slow down", timeout=60_000
-    )
-    text = s.page.inner_text("#lookup-panel")
-    assert "Not looked up. Nothing was sent for this DOI." in text
+    panel = s.page.locator("#online-panel")
+    expect(panel).to_contain_text("slow down", timeout=60_000)
+    expect(panel).to_contain_text("Not looked up. Nothing was sent for this DOI.")
+    expect(panel.locator("#online-retry")).to_be_visible()
     expect(s.page.locator(".tile.no_verdict .big")).to_have_text("3 of 10")  # nothing changed
     assert s.errors == []
 
@@ -358,14 +350,26 @@ def test_crossref_unreachable_is_a_readable_message(open_page: Any) -> None:
     def down(route: Any) -> None:
         route.abort()
 
-    s = open_page(crossref=down)
+    s = open_page(crossref=down, online=True)
     load_sample(s, "sample-references-messy.bib")
-    tick(s, "#crossref-on")
     s.check()
-    s.page.click("#lookup-go")
-    expect(s.page.locator("#lookup-panel")).to_contain_text(
+    expect(s.page.locator("#online-panel")).to_contain_text(
         "Could not reach Crossref", timeout=30_000
     )
+    expect(s.page.locator(".tile")).to_have_count(3)  # the check itself still worked
+
+
+def test_the_stop_button_stops(open_page: Any) -> None:
+    def hang(route: Any) -> None:
+        """Never answer, like a very slow server."""
+
+    s = open_page(crossref=hang, online=True)
+    load_sample(s, "sample-references-messy.bib")
+    s.check()
+    expect(s.page.locator("#online-stop")).to_be_visible()
+    s.page.click("#online-stop")
+    expect(s.page.locator("#online-panel")).to_contain_text("Stopped by you", timeout=30_000)
+    expect(s.page.locator("#online-panel")).to_contain_text("Nothing was sent for this DOI")
     expect(s.page.locator(".tile")).to_have_count(3)
 
 
@@ -373,7 +377,8 @@ def test_crossref_unreachable_is_a_readable_message(open_page: Any) -> None:
 
 
 def test_keyboard_only(open_page: Any) -> None:
-    s = open_page()
+    # Start from the page as it ships (Crossref lookups on), as a real keyboard user would.
+    s = open_page(crossref=search_reply([]), online=True)
     page = s.page
     page.keyboard.press("Tab")
     assert page.evaluate("document.activeElement.className") == "skip"
@@ -491,35 +496,15 @@ def searches(session: Any) -> list[Any]:
     return [r for r in session.requests if r.url.startswith(SEARCH_ORIGIN)]
 
 
-def test_title_search_is_off_by_default(open_page: Any) -> None:
-    s = open_page(crossref=search_reply([crossref_item(NUMPY)]))
-    assert not s.page.locator("#search-on").is_checked()
-    s.check(NO_DOI_BIB)
-    expect(s.page.locator(".tile.no_verdict .big")).to_have_text("1 of 1")
-    assert s.page.locator("#search-panel").count() == 0
-    assert not any("crossref" in r.url for r in s.requests)
-
-
-def test_title_search_shows_what_is_sent_and_sends_nothing_until_clicked(
-    open_page: Any, shot: Any
-) -> None:
+def test_title_search_sends_only_the_stated_words(open_page: Any, shot: Any) -> None:
     decoy = {
         **NUMPY,
         "doi": "10.5555/decoy",
         "title": "Array programming in Python",
         "year": "2019",
     }
-    s = open_page(crossref=search_reply([crossref_item(decoy), crossref_item(NUMPY)]))
-    tick(s, "#search-on")
+    s = open_page(crossref=search_reply([crossref_item(decoy), crossref_item(NUMPY)]), online=True)
     s.check(NO_DOI_BIB)
-    panel = s.page.locator("#search-panel")
-    expect(panel).to_contain_text("Nothing has been sent")
-    expect(panel).to_contain_text("“Array programming with NumPy Harris 2020”")
-    expect(panel).to_contain_text(
-        SEARCH_ORIGIN + "Array%20programming%20with%20NumPy%20Harris%202020"
-    )
-    assert searches(s) == []  # ticking the box and checking sent nothing
-    s.page.click("#search-go")
     expect(s.page.locator(".candidates")).to_be_visible(timeout=30_000)
     sent = searches(s)
     assert len(sent) == 1 and sent[0].method == "GET" and not sent[0].post_data
@@ -533,6 +518,7 @@ def test_title_search_shows_what_is_sent_and_sends_nothing_until_clicked(
     assert "Possible DOIs from Crossref" in text
     assert "Nothing is chosen for you" in text
     assert "year matches" in text and "year differs" in text
+    assert "Exactly what was sent" in results_text(s) and SEARCH_ORIGIN in results_text(s)
     # Suggestions alone change nothing: the verdict is still "no verdict".
     expect(s.page.locator(".tile.no_verdict .big")).to_have_text("1 of 1")
     expect(s.page.locator(".tile.verified .big")).to_have_text("0 of 1")
@@ -540,10 +526,8 @@ def test_title_search_shows_what_is_sent_and_sends_nothing_until_clicked(
 
 
 def test_picking_a_doi_reruns_citeproof_and_is_labelled(open_page: Any) -> None:
-    s = open_page(crossref=search_reply([crossref_item(NUMPY)]))
-    tick(s, "#search-on")
+    s = open_page(crossref=search_reply([crossref_item(NUMPY)]), online=True)
     s.check(NO_DOI_BIB)
-    s.page.click("#search-go")
     expect(s.page.locator(".candidates")).to_be_visible(timeout=30_000)
     s.page.click(f"[data-use-doi='{NUMPY['doi']}']")
     expect(s.page.locator(".tile.verified .big")).to_have_text("1 of 1")
@@ -560,22 +544,19 @@ def test_title_search_rate_limit_stops_and_changes_nothing(open_page: Any) -> No
             status=429, headers={"access-control-allow-origin": "*", "retry-after": "0"}, body=""
         )
 
-    s = open_page(crossref=limited)
-    tick(s, "#search-on")
+    s = open_page(crossref=limited, online=True)
     s.check(NO_DOI_BIB)
-    s.page.click("#search-go")
-    expect(s.page.locator("#search-panel")).to_contain_text("slow down", timeout=60_000)
+    expect(s.page.locator("#online-panel")).to_contain_text("slow down", timeout=60_000)
     assert s.page.locator(".candidates").count() == 0
     expect(s.page.locator(".tile.no_verdict .big")).to_have_text("1 of 1")
 
 
-def test_title_search_skips_references_with_a_doi_or_no_title(open_page: Any) -> None:
-    s = open_page(crossref=search_reply([]))
-    tick(s, "#search-on")
+def test_nothing_is_sent_when_there_is_nothing_to_look_up(open_page: Any) -> None:
+    s = open_page(crossref=search_reply([]), online=True)
     load_sample(s, "sample-references-good.bib")
     s.check()
-    expect(s.page.locator("#search-panel")).to_contain_text("Nothing to search for")
-    assert searches(s) == []
+    expect(s.page.locator("#online-panel")).to_contain_text("Nothing needed looking up")
+    assert not any("crossref" in r.url for r in s.requests)
 
 
 # ----------------------------------------------------------------------- what is visible by default
@@ -614,10 +595,10 @@ def test_the_start_screen_is_short(open_page: Any) -> None:
     page = s.page
     assert page.locator("#refs").is_visible() and page.locator("#check-btn").is_visible()
     # Explanations are folded away until asked for.
-    for hidden in ("#privacy ul", "#online .hint", "#sample-list"):
+    for hidden in ("#privacy ul", "#sample-list"):
         assert not page.locator(hidden).first.is_visible(), hidden
     words = len(page.inner_text("main").split())
-    assert words < 400, f"start screen has {words} words in <main>"
+    assert words < 420, f"start screen has {words} words in <main>"
 
 
 def test_filters_show_only_what_was_asked_for(open_page: Any) -> None:

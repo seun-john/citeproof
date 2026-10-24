@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; connect-src 'self' https://cdn.jsdelivr.net https://api.crossref.org; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light dark">
-<meta name="description" content="Paste a reference list and see which references match a catalogue of known records. Runs CiteProof inside your browser; nothing you paste is uploaded.">
+<meta name="description" content="Paste a reference list and see which references match a catalogue of known records. Runs CiteProof inside your browser.">
 <title>CiteProof in your browser</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="assets/app.css">
@@ -22,14 +22,14 @@
     <p class="lead">Paste your reference list and see which references match a trusted catalogue.</p>
     <p class="privacy-pill">
       <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2h1a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h1Zm2 0h6V8a3 3 0 0 0-6 0v2Z"/></svg>
-      <span>Runs in your browser. Nothing you paste is uploaded.</span>
+      <span>Checked in your browser. Only DOIs or titles go to Crossref, and you can switch that off.</span>
     </p>
     <details class="how" id="privacy">
       <summary>How your data is handled</summary>
       <ul>
-        <li>Your list, any catalogue file and the results stay in this tab. No server, account, cookies or analytics.</li>
+        <li>Your list, any catalogue file and the results stay in this tab, apart from the Crossref lookups below. No server, account, cookies or analytics.</li>
         <li>On opening, the page downloads its own files and the Python engine (Pyodide <span id="pyodide-version">0.29.5</span>) from <code>cdn.jsdelivr.net</code>. Nothing you type is in those downloads.</li>
-        <li>Two optional Crossref lookups are <strong>off</strong>. If you turn one on and press Send, the DOIs, or the title, first author and year of references with no DOI, go to <code>api.crossref.org</code>. The page shows exactly what first.</li>
+        <li>The Crossref lookups are <strong>on</strong> and can be switched off just above the Check button. When on, pressing Check sends the DOIs that are not in the catalogue, and the title, first author's family name and year of references with no DOI, to <code>api.crossref.org</code>. Nothing else leaves your device.</li>
       </ul>
     </details>
   </div>
@@ -97,29 +97,29 @@
       </details>
     </fieldset>
 
-    <details class="how optional" id="online">
-      <summary>Optional: look things up online <span class="tag">off</span></summary>
-      <p class="hint">Both are off. Ticking a box sends nothing: after you check, the page lists exactly what it would send and waits for a Send button.</p>
+    <fieldset class="field online" id="online">
+      <legend class="field-label">Look up missing records on Crossref</legend>
       <div class="choice">
-        <input type="checkbox" id="crossref-on" aria-describedby="crossref-help">
+        <input type="checkbox" id="crossref-on" checked aria-describedby="crossref-help">
         <label for="crossref-on">Look up DOIs that are not in the catalogue</label>
       </div>
-      <p id="crossref-help" class="hint">Sends only DOIs to Crossref.</p>
+      <p id="crossref-help" class="hint">Sends only the DOI.</p>
       <div class="choice">
-        <input type="checkbox" id="search-on" aria-describedby="search-help">
-        <label for="search-on">Find possible DOIs for references that have none</label>
+        <input type="checkbox" id="search-on" checked aria-describedby="search-help">
+        <label for="search-on">Suggest DOIs for references that have none</label>
       </div>
-      <p id="search-help" class="hint">Sends each such reference's <strong>title, first author's family name and year</strong> to Crossref. It suggests up to three matches; nothing is chosen for you.</p>
+      <p id="search-help" class="hint">Sends the reference's title, first author's family name and year. You choose; nothing is picked for you.</p>
+      <p class="hint">Runs automatically when you press Check. Untick both to keep everything on this device.</p>
       <details class="how">
-        <summary>What exactly is sent, and what comes back?</summary>
+        <summary>What exactly is sent?</summary>
         <ul>
           <li>Requests go to <code>api.crossref.org</code>, one at a time. Crossref also sees your IP address and the usual request headers. No email address, key or cookie is used.</li>
+          <li>The results show every address that was sent.</li>
           <li>Lookups are rate-limited. If Crossref asks the page to slow down, it stops and says so.</li>
-          <li>Results are added to the comparison for that run only and labelled as Crossref records. A DOI Crossref does not know is still &ldquo;not found&rdquo;, not &ldquo;wrong&rdquo;.</li>
-          <li>Title-search matches are suggestions. The result does not change until you press <em>Use this DOI</em> on one you have read.</li>
+          <li>A DOI Crossref does not know is still &ldquo;not found&rdquo;, not &ldquo;wrong&rdquo;.</li>
         </ul>
       </details>
-    </details>
+    </fieldset>
 
     <div class="actions">
       <button type="submit" id="check-btn" class="btn primary" disabled>Check references</button>

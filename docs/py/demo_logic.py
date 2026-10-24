@@ -56,6 +56,7 @@ BUCKET = {
 HEADLINES = {
     "VERIFIED": "Matches a record in this catalogue.",
     "METADATA_MISMATCH": "Found in this catalogue, but some details differ.",
+    "METADATA_MISMATCH_INITIALS": "Found in this catalogue. Only the authors' given names differ.",
     "NEEDS_REVIEW_NOT_FOUND": "Not found in this catalogue.",
     "NEEDS_REVIEW_NO_DOI": "No DOI, so it could not be looked up in this catalogue.",
 }
@@ -449,6 +450,22 @@ def _author_hint(mine: Any, theirs: Any) -> str:
     return ""
 
 
+def _only_given_names_differ(differences: dict[str, Any]) -> bool:
+    """True when authors are the only difference and every family name matches in order.
+
+    This is display only. CiteProof still reports METADATA_MISMATCH for it; the page just says
+    that the difference is limited to how given names are written (initials or full names).
+    """
+    if set(differences) != {"authors"}:
+        return False
+    mine, theirs = differences["authors"].get("reference"), differences["authors"].get("catalogue")
+    if not isinstance(mine, list) or not isinstance(theirs, list) or len(mine) != len(theirs):
+        return False
+    if any(re.search(r"et al|\u2026|\.\.\.", str(a)) for a in mine):
+        return False
+    return [_surname(a) for a in mine] == [_surname(a) for a in theirs]
+
+
 def _difference_lines(
     differences: dict[str, Any],
     ref: dict[str, Any],
@@ -553,6 +570,7 @@ def build_result(
     read_info: dict[str, Any] = parsed.get("read") or {}
     chosen: dict[str, str] = parsed.get("chosen") or {}
     rows: list[dict[str, Any]] = []
+    initials_rows = 0
     counts = {"verified": 0, "metadata_mismatch": 0, "no_verdict": 0}
     flags_count = {
         "DUPLICATE": 0,
@@ -589,7 +607,11 @@ def build_result(
                 {"label": "Compared", "value": "title, authors, year and journal all match"}
             )
         elif verdict == "METADATA_MISMATCH":
-            headline = HEADLINES["METADATA_MISMATCH"]
+            initials_only = _only_given_names_differ(comparison["evidence"]["differences"])
+            initials_rows += initials_only
+            headline = HEADLINES[
+                "METADATA_MISMATCH_INITIALS" if initials_only else "METADATA_MISMATCH"
+            ]
             evidence.append({"label": "Matched by DOI", "value": doi})
             evidence += _difference_lines(
                 comparison["evidence"]["differences"], ref, record or {}, ref["id"] in read_info
@@ -689,6 +711,7 @@ def build_result(
     summary = {"total": total}
     for key, count in counts.items():
         summary[key] = {"count": count, "percent": _percent(count, total)}
+    summary["metadata_mismatch"]["only_given_names"] = initials_rows
     summary["other_flags"] = flags_count
     return {
         "ok": True,
@@ -763,6 +786,7 @@ def run_check(
                 have.add(doi)
                 added += 1
         if added:
+            label = f"{label} + {added} from Crossref"
             notices.append(
                 f"{added} record(s) were added from your Crossref lookup. Their provenance says so."
             )

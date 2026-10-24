@@ -113,6 +113,7 @@ def open_page(
         cdn: str = "serve",
         crossref: Callable[[Any], None] | None = None,
         wait: bool = True,
+        online: bool = False,
     ) -> Session:
         ctx = browser.new_context(
             viewport={"width": width, "height": height},
@@ -162,6 +163,9 @@ def open_page(
         session = Session(page, requests, hooks)
         if wait:
             session.wait_ready()
+            if not online:  # the page ships with the Crossref lookups on; most tests need them off
+                page.uncheck("#crossref-on")
+                page.uncheck("#search-on")
         return session
 
     yield make

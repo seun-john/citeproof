@@ -859,3 +859,43 @@ def test_csv_export_marks_a_chosen_doi() -> None:
     result = check(numpy_bib_without_doi(), CATALOGUE, doi_overrides={"harris2020": NUMPY["doi"]})
     row = read_csv(demo.results_to_csv(result))[0]
     assert row["doi_as_given"] == "" and "DOI added by you" in row["evidence"]
+
+
+# ----------------------------------------------------- mild mismatches, Crossref label
+
+
+def test_initials_only_mismatch_is_labelled_but_the_verdict_is_citeproofs() -> None:
+    result = check(MCKINNEY_APA, CATALOGUE)
+    row = result["rows"][0]
+    assert row["verdict"] == "METADATA_MISMATCH"  # unchanged
+    assert row["headline"] == "Found in this catalogue. Only the authors' given names differ."
+    assert result["summary"]["metadata_mismatch"] == {
+        "count": 1,
+        "percent": 100.0,
+        "only_given_names": 1,
+    }
+    assert result["summary"]["verified"]["count"] == 0  # not promoted to verified
+
+
+def test_other_mismatches_are_not_called_mild() -> None:
+    result = check(MESSY, CATALOGUE)
+    assert result["summary"]["metadata_mismatch"]["only_given_names"] == 0
+    for row in result["rows"]:
+        if row["verdict"] == "METADATA_MISMATCH":
+            assert row["headline"] == demo.HEADLINES["METADATA_MISMATCH"]
+    # A shortened author list ("et al.") is a real difference, not a matter of initials.
+    short = check(TEXT, CATALOGUE)["rows"][-1]
+    assert short["headline"] == demo.HEADLINES["METADATA_MISMATCH"]
+
+
+def test_a_title_difference_alongside_initials_is_not_mild() -> None:
+    other_title = MCKINNEY_APA.replace("Data structures for", "Some other thing about")
+    row = check(other_title, CATALOGUE)["rows"][0]
+    assert row["headline"] == demo.HEADLINES["METADATA_MISMATCH"]
+
+
+def test_the_catalogue_label_says_how_many_records_came_from_crossref() -> None:
+    extra = demo.crossref_to_record({"message": crossref_item(NUMPY)}, "2026-10-24")
+    result = check(numpy_bib_without_doi() + "@misc{x, title={T}}", [REC], extra_records=[extra])
+    assert result["catalogue_label"] == "test catalogue + 1 from Crossref"
+    assert result["catalogue_size"] == 2
