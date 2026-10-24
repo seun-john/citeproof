@@ -25,10 +25,11 @@ from difflib import SequenceMatcher
 from typing import Any
 from urllib.parse import quote, urlencode
 
-from text_references import parse_text_references
+import styles
+from text_references import _expand_pages, parse_text_references
 
 from citeproof import __version__ as CITEPROOF_VERSION
-from citeproof.bibtex import parse_bibtex
+from citeproof.bibtex import ENTRY, SKIP, _balanced, _fields, parse_bibtex
 from citeproof.core import InputError, norm
 from citeproof.references import TITLE_NEAR, citeproof, normalise_doi
 
@@ -40,9 +41,10 @@ MAX_LOOKUPS = 25
 
 CROSSREF_WORKS = "https://api.crossref.org/works/"
 CROSSREF_SEARCH = "https://api.crossref.org/works?"
-SEARCH_FIELDS = "DOI,title,author,issued,container-title"
+SEARCH_FIELDS = "DOI,title,author,issued,container-title,volume,issue,page,type"
 MIN_SEARCH_TITLE = 12
 DOI_SHAPE = re.compile(r"^10\.\d{4,9}/\S+$")
+CROSSREF_TYPES = {"journal-article": "article-journal", "proceedings-article": "paper-conference"}
 
 # CiteProof gives each reference exactly one of these as its comparison finding.
 COMPARISON = ("VERIFIED", "METADATA_MISMATCH", "NEEDS_REVIEW")
@@ -77,7 +79,18 @@ CSV_COLUMNS = [
     "citeproof_version",
     "person_decision",
 ]
-CATALOGUE_FIELDS = ("doi", "title", "authors", "year", "journal", "retracted", "provenance")
+CATALOGUE_FIELDS = (
+    "doi",
+    "title",
+    "authors",
+    "year",
+    "journal",
+    "retracted",
+    "provenance",
+    "volume",
+    "issue",
+    "pages",
+)
 NUMBERED_LIST = re.compile(r"^\[\s*\d{1,3}\s*\]")
 TRUE_WORDS = {"true", "yes", "y", "1"}
 FALSE_WORDS = {"false", "no", "n", "0"}
@@ -236,6 +249,8 @@ def parse_references(text: str) -> dict[str, Any]:
                 "Check the quote marks and braces in your entries.",
             ) from exc
         if entries:
+            locators = _bibtex_locators(stripped)
+            entries = [{**e, **locators.get(e["id"], {})} for e in entries]
             parsed = {
                 "format": "bibtex",
                 "references": entries,
@@ -257,6 +272,28 @@ def parse_references(text: str) -> dict[str, Any]:
         )
     parsed["notices"] = notices
     return parsed
+
+
+def _bibtex_locators(text: str) -> dict[str, dict[str, str]]:
+    """Volume, issue, pages and type per BibTeX key (CiteProof's reader keeps only the rest).
+
+    These feed the Reformat feature only. CiteProof never compares them.
+    """
+    found: dict[str, dict[str, str]] = {}
+    for match in ENTRY.finditer(text):
+        kind = match.group(1).lower()
+        if kind in SKIP:
+            continue
+        end = _balanced(text, text.index("{", match.start()))
+        fields = _fields(text[match.end() : end - 1])
+        extra = {
+            "volume": fields.get("volume", ""),
+            "issue": fields.get("number") or fields.get("issue", ""),
+            "pages": _expand_pages(fields.get("pages", "").replace("--", "\u2013")),
+            "type": "paper-conference" if kind in {"inproceedings", "conference"} else "",
+        }
+        found[match.group(2)] = {k: v for k, v in extra.items() if v}
+    return found
 
 
 def _read_plain_text(text: str, notices: list[str]) -> dict[str, Any]:
@@ -557,6 +594,14 @@ def _flag_note(flag: dict[str, Any]) -> str:
     return ""
 
 
+def _count_layouts(read_info: dict[str, Any]) -> dict[str, int]:
+    """How many pasted references were in each recognised layout (APA, MLA, IEEE, ...)."""
+    counts: dict[str, int] = {}
+    for info in read_info.values():
+        counts[info["style"]] = counts.get(info["style"], 0) + 1
+    return counts
+
+
 def build_result(
     parsed: dict[str, Any],
     report: dict[str, Any],
@@ -723,20 +768,21 @@ def build_result(
         "rows": rows,
         "missing_references": missing,
         "notices": notices,
+        "layouts_read": _count_layouts(read_info),
         "lookup": lookup_candidates(rows),
         "search": search_plan(rows, refs),
         "report": report,
     }
 
 
-def run_check(
+def _prepare(
     references_text: str,
     catalogue_records: list[dict[str, Any]] | None,
     catalogue_label: str,
     extra_records: list[dict[str, Any]] | None = None,
     doi_overrides: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    """Check pasted references against a catalogue with CiteProof. Raises DemoError.
+) -> tuple[dict[str, Any], list[dict[str, Any]], str, list[str]]:
+    """Read the references and assemble the catalogue exactly as a check will use them.
 
     `doi_overrides` maps a reference id to a DOI the person chose after a Crossref title search.
     It only applies to references that have no DOI of their own.
@@ -790,6 +836,20 @@ def run_check(
             notices.append(
                 f"{added} record(s) were added from your Crossref lookup. Their provenance says so."
             )
+    return parsed, records, label, notices
+
+
+def run_check(
+    references_text: str,
+    catalogue_records: list[dict[str, Any]] | None,
+    catalogue_label: str,
+    extra_records: list[dict[str, Any]] | None = None,
+    doi_overrides: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Check pasted references against a catalogue with CiteProof. Raises DemoError."""
+    parsed, records, label, notices = _prepare(
+        references_text, catalogue_records, catalogue_label, extra_records, doi_overrides
+    )
     try:
         report = citeproof(
             {
@@ -913,6 +973,15 @@ def crossref_to_record(payload: Any, fetched_on: str, via: str = "DOI lookup") -
     containers = message.get("container-title")
     if isinstance(containers, list) and containers and _clean_text(containers[0]):
         record["journal"] = _clean_text(containers[0])
+    for key, source in (("volume", "volume"), ("issue", "issue"), ("pages", "page")):
+        value = message.get(source)
+        if isinstance(value, str) and _clean_text(value):
+            record[key] = (
+                _expand_pages(_clean_text(value)) if key == "pages" else _clean_text(value)
+            )
+    kind = message.get("type")
+    if isinstance(kind, str):
+        record["type"] = CROSSREF_TYPES.get(kind, f"other:{kind}")
     record["provenance"] = (
         f"Crossref REST API ({via}; api.crossref.org/works/{doi}), fetched live from your browser "
         f"on {fetched_on}; retraction status was not read from this response"
@@ -1003,6 +1072,105 @@ def _year_of(value: Any) -> str:
     return match.group() if match else ""
 
 
+# --------------------------------------------------------------------------- reformatting
+
+SENTENCE_CASE_STYLES = {"apa", "harvard", "ieee", "ama"}
+STYLE_CAVEATS = {
+    "apa": ["APA sets article titles in sentence case. Capitalisation is not changed here."],
+    "harvard": [
+        "Harvard sets article titles in sentence case. Capitalisation is not changed here."
+    ],
+    "ieee": [
+        "IEEE sets titles in sentence case and abbreviates journal names. Neither is done here."
+    ],
+    "ama": [
+        "AMA sets titles in sentence case and abbreviates journal names. Neither is done here."
+    ],
+    "mla": [
+        "MLA sets titles in headline case. The style file applies it automatically and can "
+        "change how a name is written (for example a lower-case product name)."
+    ],
+    "chicago-author-date": [
+        "Chicago sets titles in headline case. The style file applies it automatically and can "
+        "change how a name is written (for example a lower-case product name)."
+    ],
+}
+GENERAL_CAVEATS = [
+    "Reformatting does not check that a reference is real. The verdicts above still apply.",
+    "Formatted automatically from the details read. Check it against your style guide or your "
+    "instructor's requirements before you submit.",
+    "Only journal articles and conference papers are formatted. Books, chapters and web pages "
+    "are listed as skipped.",
+]
+
+
+def _looks_title_case(title: str) -> bool:
+    words = [w for w in re.findall(r"[^\W\d_][\w'\u2019-]*", title)[1:] if len(w) > 3]
+    return len(words) >= 3 and sum(w[0].isupper() for w in words) >= 0.7 * len(words)
+
+
+def reformat(
+    references_text: str,
+    catalogue_records: list[dict[str, Any]] | None,
+    extra_records: list[dict[str, Any]] | None = None,
+    doi_overrides: dict[str, str] | None = None,
+    style_id: str = "apa",
+) -> dict[str, Any]:
+    """The pasted references formatted in one style. Raises DemoError."""
+    if style_id not in styles.STYLES:
+        raise DemoError("Unknown citation style", f"{style_id!r} is not one of the styles offered.")
+    parsed, records, _label, _notices = _prepare(
+        references_text, catalogue_records, "", extra_records, doi_overrides
+    )
+    refs = parsed["references"]
+    if not isinstance(refs, list) or not all(isinstance(r, dict) for r in refs):
+        raise explain_error(InputError("'references' must be list"))
+    ids = [str(r.get("id")) for r in refs]
+    if len(set(ids)) != len(ids):
+        raise explain_error(InputError("Reference ids must be unique"))
+    by_doi = {
+        normalise_doi(r.get("doi")): r for r in records if isinstance(r, dict) and r.get("doi")
+    }
+    read = parsed.get("read") or {}
+    chosen = parsed.get("chosen") or {}
+    items, notes, skipped = [], {}, []
+    for ref in refs:
+        doi = normalise_doi(ref.get("doi"))
+        record = by_doi.get(doi) if doi else None
+        raw = read.get(ref["id"], {}).get("raw", "")
+        item, item_notes, why = styles.build_item(ref, record, raw)
+        if item is None:
+            skipped.append({"id": ref["id"], "title": str(ref.get("title", "")), "reason": why})
+            continue
+        item["id"] = ref["id"]
+        if ref["id"] in chosen:
+            item_notes.append("The DOI was added by you from a Crossref title search.")
+        if record is not None and record.get("retracted") is True:
+            item_notes.append("The catalogue marks this work as retracted. Check before citing it.")
+        if style_id in SENTENCE_CASE_STYLES and _looks_title_case(item["title"]):
+            item_notes.append("The title is written in Title Case; this style uses sentence case.")
+        if style_id in SENTENCE_CASE_STYLES:  # these print initials, so full names would not show
+            item_notes = [n for n in item_notes if "taken in full" not in n]
+        items.append(item)
+        notes[ref["id"]] = item_notes
+    entries = styles.render(items, style_id) if items else []
+    for entry in entries:
+        entry["notes"] = notes[entry["id"]]
+    return {
+        "style_id": style_id,
+        "style": styles.STYLES[style_id][0],
+        "entries": entries,
+        "skipped": skipped,
+        "caveats": [*STYLE_CAVEATS.get(style_id, []), *GENERAL_CAVEATS],
+        "numbered": style_id in {"ieee", "ama"},
+    }
+
+
+def results_to_text(formatted: dict[str, Any]) -> str:
+    """The formatted list as plain text, one reference per line."""
+    return "\r\n".join(entry["text"] for entry in formatted["entries"]) + "\r\n"
+
+
 # --------------------------------------------------------------------------- bridge for the page
 
 
@@ -1051,6 +1219,26 @@ def api_crossref_candidates(response_json: str, title: str, year: str, fetched_o
             "candidates": crossref_candidates(json.loads(response_json), title, year, fetched_on)
         }
     )
+
+
+def api_styles() -> str:
+    return json.dumps([{"id": k, "label": v[0]} for k, v in styles.STYLES.items()])
+
+
+def api_reformat(
+    references_text: str,
+    catalogue_json: str,
+    extra_json: str,
+    overrides_json: str,
+    style_id: str,
+) -> str:
+    def call() -> dict[str, Any]:
+        records = json.loads(catalogue_json) if catalogue_json else None
+        extras = json.loads(extra_json) if extra_json else None
+        overrides = json.loads(overrides_json) if overrides_json else None
+        return reformat(references_text, records, extras, overrides, style_id)
+
+    return _wrap(call)
 
 
 def api_csv(result_json: str) -> str:

@@ -1,0 +1,32 @@
+{
+  "engine": [
+    "citeproc/__init__.py",
+    "citeproc/_version.py",
+    "citeproc/data/locales/locales-en-GB.xml",
+    "citeproc/data/locales/locales-en-US.xml",
+    "citeproc/data/locales/locales.json",
+    "citeproc/formatter/__init__.py",
+    "citeproc/formatter/html.py",
+    "citeproc/formatter/plain.py",
+    "citeproc/formatter/rst.py",
+    "citeproc/frontend.py",
+    "citeproc/model.py",
+    "citeproc/source/__init__.py",
+    "citeproc/source/bibtex/__init__.py",
+    "citeproc/source/bibtex/bibparse.py",
+    "citeproc/source/bibtex/bibtex.py",
+    "citeproc/source/bibtex/latex/__init__.py",
+    "citeproc/source/bibtex/latex/macro.py",
+    "citeproc/source/json.py",
+    "citeproc/string.py",
+    "citeproc/types.py"
+  ],
+  "csl": [
+    "apa.csl",
+    "modern-language-association.csl",
+    "chicago-author-date.csl",
+    "harvard-cite-them-right.csl",
+    "ieee.csl",
+    "american-medical-association.csl"
+  ]
+}

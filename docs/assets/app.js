@@ -8,7 +8,7 @@ const PYODIDE_BASE = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/
 const PYODIDE_SRI = "sha384-VR47TfKeAmT7vMej7bwOVg0tHTQLLGMSIpsXtFMCZG5OpKZSIXoSLtGY//qHcxc6";
 const PY_FILES = [
   "citeproof/__init__.py", "citeproof/core.py", "citeproof/references.py",
-  "citeproof/bibtex.py", "citeproof/claims.py", "demo_logic.py", "text_references.py",
+  "citeproof/bibtex.py", "citeproof/claims.py", "demo_logic.py", "text_references.py", "styles.py",
 ];
 const MAX_CATALOGUE_BYTES = 8 * 1000 * 1000;
 const LOOKUP_GAP_MS = 400;
@@ -22,6 +22,12 @@ const state = {
   result: null,
   lookupAbort: null,
   online: null, // progress and log of the Crossref lookups for this result
+  pyodide: null,
+  styleList: [],
+  styleReady: false, // the citation-style engine is loaded on first use
+  checkedText: "", // exactly what was checked, so later steps use the same text
+  catalogueUsed: null,
+  reformat: { style: "apa", out: null, open: false },
   extra: [], // catalogue records added from Crossref for this result
   overrides: {}, // reference id -> DOI the person chose from a title search
   candidates: {}, // reference id -> possible DOIs from a title search (suggestions)
@@ -86,7 +92,9 @@ async function startEngine() {
       pyodide.FS.writeFile(`/app/${file}`, await response.text());
     }
     pyodide.runPython("import sys\nsys.path.insert(0, '/app')");
+    state.pyodide = pyodide;
     state.demo = pyodide.pyimport("demo_logic");
+    state.styleList = JSON.parse(state.demo.api_styles());
     const info = JSON.parse(state.demo.api_info());
     $("cp-version").textContent = info.citeproof_version;
     setEngine(`Ready \u00b7 CiteProof ${info.citeproof_version} runs in this tab`, true);
@@ -311,8 +319,9 @@ function renderResult(result) {
   const s = result.summary;
   const body = $("results-body");
   const extra = flagsLine(s.other_flags);
+  const layouts = Object.entries(result.layouts_read || {}).map(([name, n]) => `${name} \u00d7${n}`).join(", ");
   const kids = [
-    h("p", { class: "meta", text: `${s.total} reference${s.total === 1 ? "" : "s"} · ${result.catalogue_label} (${result.catalogue_size} records) · ${{ bibtex: "BibTeX", json: "JSON", text: "pasted text" }[result.input_format]} · CiteProof ${result.citeproof_version}` }),
+    h("p", { class: "meta", text: `${s.total} reference${s.total === 1 ? "" : "s"} · ${result.catalogue_label} (${result.catalogue_size} records) · ${{ bibtex: "BibTeX", json: "JSON", text: "pasted text" }[result.input_format]}${layouts ? ` (${layouts})` : ""} · CiteProof ${result.citeproof_version}` }),
     h("p", { class: "banner", text: "These are comparisons, not judgements. A person must decide what each result means." }),
     h("ul", { class: "tiles", "aria-label": "Summary" },
       tile("verified", "Verified", s, "DOI found, all fields match"),
@@ -331,6 +340,7 @@ function renderResult(result) {
         h("li", {}, h("code", { text: "VERIFIED" }), " the DOI is in the catalogue and title, authors, year and journal all match."),
         h("li", {}, h("code", { text: "METADATA_MISMATCH" }), " the DOI is in the catalogue but a field differs or is missing."),
         h("li", {}, h("code", { text: "NEEDS_REVIEW" }), " no DOI, or the DOI is not in this catalogue. It says nothing about whether the reference is real."))),
+    renderReformatPanel(),
     result.notices.length ? h("details", { class: "notes" },
       h("summary", { text: `Notes (${result.notices.length})` }),
       result.notices.map((n) => h("p", { text: n }))) : null,
@@ -351,6 +361,7 @@ function renderResult(result) {
     button.addEventListener("click", () => useCandidate(button.dataset.ref, button.dataset.useDoi));
   }
   renderOnlinePanel();
+  wireReformat();
 }
 
 function showResults(node, heading = "Results") {
@@ -374,16 +385,16 @@ function download(name, type, text) {
 /* ---------- running a check ---------- */
 
 function runCheck({ focus = true } = {}) {
-  const catalogue = chosenCatalogue();
+  const catalogue = state.catalogueUsed;
   if (!catalogue) {
     showResults(renderError({
       title: "No catalogue file chosen",
       message: "“My own catalogue file” is selected but no file has been loaded.",
-      hint: "Choose a CSV or JSON file in step 2, or select the sample catalogue.", detail: "",
+      hint: "Choose a CSV or JSON file above, or select the sample catalogue.", detail: "",
     }), "Nothing to show yet");
     return null;
   }
-  const out = call("api_check", $("refs").value, JSON.stringify(catalogue.records), catalogue.label,
+  const out = call("api_check", state.checkedText, JSON.stringify(catalogue.records), catalogue.label,
     state.extra.length ? JSON.stringify(state.extra) : "",
     Object.keys(state.overrides).length ? JSON.stringify(state.overrides) : "");
   if (!out.ok) {
@@ -404,6 +415,9 @@ async function onSubmit(event) {
   state.extra = [];
   state.overrides = {};
   state.candidates = {};
+  state.reformat.out = null;
+  state.checkedText = $("refs").value;
+  state.catalogueUsed = chosenCatalogue();
   const first = runCheck();
   if (first) await runOnline();
 }
@@ -561,6 +575,133 @@ function renderOnlinePanel() {
   if (stop) stop.addEventListener("click", () => state.lookupAbort && state.lookupAbort.abort());
   const retry = $("online-retry");
   if (retry) retry.addEventListener("click", () => runOnline());
+}
+
+/* ---------- reformat into another citation style ---------- */
+
+async function ensureStyleEngine() {
+  if (state.styleReady) return;
+  await state.pyodide.loadPackage("lxml"); // needed by the style engine, loaded only when used
+  const manifest = await (await fetch("py/engine-files.json")).json();
+  const jobs = [
+    ...manifest.engine.map((file) => ({ from: `py/${file}`, to: `/app/${file}` })),
+    ...manifest.csl.map((file) => ({ from: `csl/${file}`, to: `/app/csl/${file}` })),
+  ];
+  for (const job of jobs) {
+    const response = await fetch(job.from);
+    if (!response.ok) throw new Error(`${job.from} returned HTTP ${response.status}`);
+    const dir = job.to.slice(0, job.to.lastIndexOf("/"));
+    state.pyodide.FS.mkdirTree(dir);
+    state.pyodide.FS.writeFile(job.to, await response.text());
+  }
+  state.styleReady = true;
+}
+
+function setReformatStatus(text) {
+  const node = $("reformat-status");
+  if (node) node.textContent = text;
+}
+
+async function doReformat() {
+  const style = $("style-pick").value;
+  const button = $("reformat-go");
+  button.disabled = true;
+  try {
+    setReformatStatus(state.styleReady ? "Formatting…" : "Loading the citation style engine (about 3 MB, once)…");
+    await ensureStyleEngine();
+    const catalogue = state.catalogueUsed;
+    const out = call("api_reformat", state.checkedText, JSON.stringify(catalogue.records),
+      state.extra.length ? JSON.stringify(state.extra) : "",
+      Object.keys(state.overrides).length ? JSON.stringify(state.overrides) : "", style);
+    state.reformat = { style, out, open: true, error: out.ok ? null : out.error };
+  } catch (error) {
+    console.error(error);
+    state.reformat = { style, out: null, open: true, error: { title: "The style engine could not be loaded", message: error.message, hint: "Check your connection and try again. Nothing you pasted was sent anywhere.", detail: "" } };
+  }
+  renderResult(state.result);
+  $("reformat-h")?.focus();
+}
+
+function formattedHtml(out) {
+  const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return out.entries.map((e) => `<p>${e.segments.map((seg) => {
+    let t = esc(seg.text);
+    if (seg.italic) t = `<i>${t}</i>`;
+    if (seg.bold) t = `<b>${t}</b>`;
+    return t;
+  }).join("")}</p>`).join("");
+}
+
+async function copyFormatted(out) {
+  const text = out.entries.map((e) => e.text).join("\n");
+  try {
+    if (window.ClipboardItem) {
+      await navigator.clipboard.write([new ClipboardItem({
+        "text/html": new Blob([formattedHtml(out)], { type: "text/html" }),
+        "text/plain": new Blob([text], { type: "text/plain" }),
+      })]);
+    } else {
+      await navigator.clipboard.writeText(text);
+    }
+    setReformatStatus("Copied. Italics are kept when you paste into Word or Google Docs.");
+  } catch (error) {
+    setReformatStatus("Could not copy automatically. Use Download instead.");
+  }
+}
+
+function renderFormatted(out) {
+  const verdicts = Object.fromEntries(state.result.rows.map((r) => [r.id, r.verdict]));
+  return h("div", { class: "formatted" },
+    h("h3", { id: "reformat-h", tabindex: "-1", text: `${out.style}: ${out.entries.length} reference${out.entries.length === 1 ? "" : "s"}` }),
+    h("p", { class: "hint", text: out.caveats.find((c) => c.startsWith("Formatted automatically")) || "" }),
+    out.entries.length ? h("div", { class: "exports" },
+      h("button", { type: "button", class: "btn small", id: "copy-formatted" }, "Copy all"),
+      h("button", { type: "button", class: "btn small", id: "download-formatted" }, "Download (.txt)")) : null,
+    h("ul", { class: "bib" }, out.entries.map((e) => h("li", {},
+      h("p", { class: "bib-entry" }, e.segments.map((seg) => {
+        if (seg.italic) return h("i", { text: seg.text });
+        if (seg.bold) return h("b", { text: seg.text });
+        return seg.text;
+      })),
+      h("p", { class: "bib-meta" },
+        verdicts[e.id] ? h("span", { class: `badge ${badgeClass(verdicts[e.id])}`, text: verdicts[e.id] }) : null,
+        e.notes.length ? ` ${e.notes.join(" ")}` : ""),
+    ))),
+    out.skipped.length ? h("details", { class: "how", open: true },
+      h("summary", { text: `Not formatted (${out.skipped.length})` }),
+      h("ul", {}, out.skipped.map((k) => h("li", {}, h("code", { text: k.id }), ` — ${k.reason}.`)))) : null,
+    h("details", { class: "how" },
+      h("summary", { text: "Things to check" }),
+      h("ul", {}, out.caveats.map((c) => h("li", { text: c })))));
+}
+
+function renderReformatPanel() {
+  const rf = state.reformat;
+  const select = h("select", { id: "style-pick", class: "select" },
+    state.styleList.map((st) => h("option", { value: st.id, selected: st.id === rf.style }, st.label)));
+  const panel = h("details", { class: "reformat how", id: "reformat" },
+    h("summary", { text: "Reformat these references into another style" }),
+    h("div", { class: "reformat-controls" },
+      h("label", { for: "style-pick", text: "Style" }), select,
+      h("button", { type: "button", class: "btn small", id: "reformat-go" }, "Reformat")),
+    h("p", { id: "reformat-status", class: "hint", role: "status", "aria-live": "polite" }),
+    rf.error ? renderError(rf.error) : null,
+    rf.out ? renderFormatted(rf.out) : null);
+  panel.open = Boolean(rf.open);
+  panel.addEventListener("toggle", () => { state.reformat.open = panel.open; });
+  return panel;
+}
+
+function wireReformat() {
+  const go = $("reformat-go");
+  if (go) go.addEventListener("click", doReformat);
+  const out = state.reformat.out;
+  const copy = $("copy-formatted");
+  if (copy && out) copy.addEventListener("click", () => copyFormatted(out));
+  const dl = $("download-formatted");
+  if (dl && out) dl.addEventListener("click", () => download(`citeproof-references-${out.style_id}.txt`, "text/plain", out.entries.map((e) => e.text).join("\r\n") + "\r\n"));
+  const pick = $("style-pick");
+  if (pick) pick.addEventListener("change", () => { state.reformat.style = pick.value; });
 }
 
 /* ---------- wiring ---------- */

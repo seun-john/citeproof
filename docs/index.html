@@ -28,7 +28,7 @@
       <summary>How your data is handled</summary>
       <ul>
         <li>Your list, any catalogue file and the results stay in this tab, apart from the Crossref lookups below. No server, account, cookies or analytics.</li>
-        <li>On opening, the page downloads its own files and the Python engine (Pyodide <span id="pyodide-version">0.29.5</span>) from <code>cdn.jsdelivr.net</code>. Nothing you type is in those downloads.</li>
+        <li>On opening, the page downloads its own files and the Python engine (Pyodide <span id="pyodide-version">0.29.5</span>) from <code>cdn.jsdelivr.net</code>. Nothing you type is in those downloads. The first time you use <em>Reformat</em>, the style engine (about 3 MB, including <code>lxml</code> from the same CDN) downloads too, and the formatting runs on your device.</li>
         <li>The Crossref lookups are <strong>on</strong> and can be switched off just above the Check button. When on, pressing Check sends the DOIs that are not in the catalogue, and the title, first author's family name and year of references with no DOI, to <code>api.crossref.org</code>. Nothing else leaves your device.</li>
       </ul>
     </details>
@@ -67,6 +67,7 @@
       <div class="chips" role="group" aria-label="Load an example list">
         <span class="chips-label">Try an example:</span>
         <button type="button" class="chip" data-sample="data/sample-references-text.txt">Pasted text</button>
+        <button type="button" class="chip" data-sample="data/sample-references-mixed.txt">Mixed styles</button>
         <button type="button" class="chip" data-sample="data/sample-references-good.bib">All match</button>
         <button type="button" class="chip" data-sample="data/sample-references-messy.bib">Messy list</button>
         <button type="button" class="chip" data-sample="data/sample-references.json">JSON</button>
@@ -142,6 +143,7 @@
       <li><strong>Source quality or citation style.</strong> Only DOI, title, authors, year and journal are compared, by wording.</li>
       <li><strong>Retractions</strong> beyond what the catalogue says.</li>
       <li><strong>Pasted-text reading.</strong> This page's own reader can misread unusual layouts. Each result shows how it was read.</li>
+      <li><strong>Reformatting is not checking.</strong> The style converter formats what was read, and does not check that a reference is real. Check its output against your style guide.</li>
       <li><strong>Decisions.</strong> Nothing here is an academic-integrity finding. A person decides.</li>
     </ul>
   </section>
@@ -150,6 +152,7 @@
 
 <footer class="wrap">
   <p>CiteProof <span id="cp-version"></span> &middot; MIT licence &middot; <a href="https://github.com/seun-john/citeproof">Source</a> &middot; <a href="https://github.com/seun-john/citeproof/blob/main/docs/README.md">Privacy, limits and local use</a> &middot; Built with Claude Code (<a href="https://github.com/seun-john/citeproof/blob/main/docs/README.md#ai-use-note">AI-use note</a>)</p>
+  <p>Citation styles are the official <a href="https://citationstyles.org/">CSL</a> files (CC BY-SA 3.0), formatted by <a href="https://pypi.org/project/citeproc-py/">citeproc-py</a> (BSD). <a href="https://github.com/seun-john/citeproof/blob/main/docs/csl/NOTICE.md">Credits and licences</a>.</p>
 </footer>
 
 </body>

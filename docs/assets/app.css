@@ -244,6 +244,16 @@ details.more .subhead { margin: 0.6rem 0 0.2rem; color: var(--muted); font-size:
 .candidates .subhead { margin: 0 0 0.2rem; font-weight: 700; }
 .says { margin: 0.2rem 0 0.4rem; padding-left: 0.7rem; border-left: 3px solid var(--border); font-size: 0.93rem; }
 .read q { font-style: normal; overflow-wrap: anywhere; }
+.reformat { background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 0.2rem 1rem 0.6rem; margin: 0.8rem 0; }
+.reformat > summary { font-weight: 700; }
+.reformat-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.7rem; margin: 0.3rem 0; }
+.select { font: inherit; min-height: 44px; padding: 0.3rem 0.6rem; border: 2px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text); max-width: 100%; }
+.formatted h3 { margin-top: 0.8rem; }
+.formatted h3:focus { outline: none; }
+.bib { list-style: none; padding: 0; margin: 0.6rem 0; display: grid; gap: 0.8rem; }
+.bib li { border-left: 4px solid var(--border); padding-left: 0.8rem; }
+.bib-entry { margin: 0; overflow-wrap: anywhere; }
+.bib-meta { margin: 0.2rem 0 0; font-size: 0.85rem; color: var(--muted); }
 .person { margin: 0.4rem 0 0; font-size: 0.85rem; color: var(--muted); }
 
 .candidates { border-top: 1px dashed var(--border); margin-top: 0.6rem; padding-top: 0.5rem; }

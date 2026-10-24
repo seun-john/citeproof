@@ -152,22 +152,112 @@ def _generic_authors(text: str) -> list[str] | None:
     return names or None
 
 
+PARTICLES = {
+    "van", "von", "der", "den", "de", "del", "della", "di", "da", "du", "la", "le", "bin", "ibn",
+    "al", "el", "ten", "ter", "zu", "zur", "dos", "das",
+}  # fmt: skip
+
+
+def _natural_to_inverted(name: str) -> str:
+    """'Stéfan van der Walt' -> 'van der Walt, Stéfan'."""
+    tokens = name.split()
+    if len(tokens) < 2:
+        return name
+    cut = len(tokens) - 1
+    while cut > 1 and tokens[cut - 1].lower() in PARTICLES:
+        cut -= 1
+    return f"{' '.join(tokens[cut:])}, {' '.join(tokens[:cut])}"
+
+
+def _first_inverted_authors(text: str) -> list[str] | None:
+    """Chicago and MLA: 'Harris, Charles R., Jarrod Millman, and Stéfan van der Walt'.
+
+    The first author is written 'Family, Given' and the rest 'Given Family'.
+    """
+    text = _squash(text).rstrip(".")
+    if len(text) > 400:
+        return None
+    tokens = [t.strip() for t in re.split(r",\s*(?:and\s+|&\s+)?", text) if t.strip()]
+    tokens = [t for t in tokens if not re.fullmatch(r"et al\.?", t)]
+    if len(tokens) < 2:
+        return None
+    first = f"{tokens[0]}, {tokens[1]}"
+    rest = [_natural_to_inverted(_trim_name(t)) for t in tokens[2:]]
+    return [_trim_name(first), *rest]
+
+
 def _vancouver_authors(text: str) -> list[str]:
     return [
         p.strip() for p in re.split(r",\s*", text.rstrip(".")) if p.strip() and "et al" not in p
     ]
 
 
-def _journal_after(rest: str, volume_follows_name: bool = False) -> str:
-    """The journal name at the start of what follows the title."""
-    rest = rest.strip(" .,;:" + QUOTES)
+PAGES = r"[A-Za-z]?\d+(?:\s*[–—\-]\s*[A-Za-z]?\d+)?"
+CONFERENCE = re.compile(
+    r"^(?:proceedings?|proc\.?|conference|symposium|workshop|annual (?:conference|meeting)|"
+    r"international (?:conference|symposium|workshop))\b",
+    re.I,
+)
+
+
+def _split_journal(rest: str, volume_follows_name: bool = False) -> tuple[str, str]:
+    """The journal name at the start of what follows the title, and the text after it."""
+    rest = rest.strip(" ,;:" + QUOTES)
     if re.match(r"in\b", rest, re.I):
-        return ""
+        return "", ""
     stops = r",\s*(?=\d)|,\s*(?:vol|no|pp)\b|\.\s|\.$"
     if volume_follows_name:  # Chicago: 'Nature 585 (7825): 357-62'
         stops += r"|\s+\d+\s*(?:\(|:|,|$)"
-    head = re.split(stops, rest, maxsplit=1)[0]
-    return _squash(head.strip(" .,;:" + QUOTES))
+    found = re.search(stops, rest)
+    head, tail = (rest[: found.start()], rest[found.start() :]) if found else (rest, "")
+    return _squash(head.strip(" .,;:" + QUOTES)), tail
+
+
+def _expand_pages(pages: str) -> str:
+    """'357-62' -> '357–362'. A range that was shortened in the text is written out in full."""
+    match = re.match(r"^([A-Za-z]?)(\d+)\s*[–—\-]\s*([A-Za-z]?)(\d+)$", pages.strip())
+    if not match:
+        return _squash(pages)
+    lead, start, lead2, end = match.groups()
+    if len(end) < len(start):
+        end = start[: len(start) - len(end)] + end
+    return f"{lead}{start}–{lead2}{end}"
+
+
+def _locators(tail: str) -> dict[str, str]:
+    """Volume, issue and pages from the text after the journal name."""
+    text = tail.strip(" .,;:")
+    out: dict[str, str] = {}
+    volume = re.search(r"\bvol(?:ume)?\.?\s*(\d+)", text, re.I)
+    issue = re.search(r"\bno\.?\s*([\w-]+)", text, re.I)
+    pages = re.search(rf"\bpp?\.?\s*({PAGES})", text, re.I)
+    if volume or issue or pages:  # MLA and IEEE: 'vol. 6, no. 60, pp. 1-9'
+        found = {"volume": volume, "issue": issue, "pages": pages}
+        out = {k: m.group(1) for k, m in found.items() if m}
+        # Harvard: '6(60), p. 3021' has a bare volume and issue before the page marker.
+        lead = re.match(r"^(?P<v>\d+)\s*(?:\((?P<i>[^)]+)\))?\s*,", text)
+        if lead and "volume" not in out:
+            out["volume"] = lead.group("v")
+            if lead.group("i") and "issue" not in out:
+                out["issue"] = lead.group("i")
+    else:
+        for pattern in (
+            rf"^(?P<v>\d+)\s*(?:\((?P<i>[^)]+)\))?\s*[,:]\s*(?P<p>{PAGES})\b",  # APA, Chicago
+            rf";\s*(?P<v>\d+)\s*(?:\((?P<i>[^)]+)\))?\s*:\s*(?P<p>{PAGES})",  # Vancouver, AMA
+            rf"^(?P<v>)(?P<i>)\s*,?\s*(?P<p>{PAGES})$",  # pages only (conference papers)
+            r"^(?P<v>\d+)\s*(?:\((?P<i>[^)]+)\))?$",  # volume and issue, no pages
+        ):
+            match = re.search(pattern, text)
+            if match:
+                out = {
+                    "volume": match.group("v") or "",
+                    "issue": match.group("i") or "",
+                    "pages": match.groupdict().get("p") or "",
+                }
+                break
+    if "pages" in out:
+        out["pages"] = _expand_pages(out["pages"])
+    return {k: v for k, v in out.items() if v}
 
 
 def _quoted_title(text: str) -> tuple[str, str] | None:
@@ -182,11 +272,37 @@ def _quoted_title(text: str) -> tuple[str, str] | None:
 
 def _sentence_title(text: str) -> tuple[str, str] | None:
     match = re.match(r"(.+?[.?!])\s+(.+)$", text)
-    return (_squash(match.group(1)).rstrip("."), match.group(2)) if match else None
+    if match:
+        return _squash(match.group(1)).rstrip("."), match.group(2)
+    return (_squash(text).rstrip("."), "") if text.strip(" .") else None  # a lone sentence
+
+
+def _initials_first_authors(text: str) -> list[str] | None:
+    """IEEE: 'W. McKinney, J. P. A. Ioannidis, and K. Smith' -> ['McKinney, W.', ...]."""
+    names = []
+    for part in re.split(r",\s*(?:and\s+)?|\s+and\s+", text.strip().rstrip(".")):
+        part = part.strip()
+        if not part or "et al" in part:
+            continue
+        match = re.match(rf"^({INITIALS})(.+)$", part)
+        if not match:
+            return None
+        names.append(f"{_squash(match.group(2))}, {_squash(match.group(1))}")
+    return names or None
+
+
+def _set_container(fields: dict[str, Any], journal: str) -> None:
+    if journal:
+        fields["journal"] = journal
+        if CONFERENCE.match(journal):
+            fields["type"] = "paper-conference"
 
 
 def read_entry(raw: str) -> dict[str, Any]:
-    """Fields read from one reference: doi, authors, year, title, journal (only those found)."""
+    """Fields read from one reference (only those found).
+
+    doi, authors, year, title, journal, and when present volume, issue, pages and type.
+    """
     fields: dict[str, Any] = {}
     doi = _find_doi(raw)
     if doi:
@@ -195,6 +311,7 @@ def read_entry(raw: str) -> dict[str, Any]:
     style = "not recognised"
 
     apa = re.match(rf"^(?P<a>.+?)\s*\((?P<y>{YEAR})\)\s*[.,]?\s*(?P<rest>.+)$", body)
+    ieee = re.match(r"^(?P<a>.+?),\s+(?P<rest>[\"“‘].+)$", body)
     chicago = re.match(rf"^(?P<a>.+?)\.\s+(?P<y>{YEAR})\.\s+(?P<rest>.+)$", body)
     mla = re.match(r"^(?P<a>.+?)\.\s+(?P<rest>[\"“‘].+)$", body)
     vancouver = re.match(
@@ -206,46 +323,63 @@ def read_entry(raw: str) -> dict[str, Any]:
         style = "APA or Harvard"
         authors = apa["a"].strip(" ,")
         fields["year"] = apa["y"]
-        rest = apa["rest"]
-        found = _quoted_title(rest) or _sentence_title(rest)
+        found = _quoted_title(apa["rest"]) or _sentence_title(apa["rest"])
         if found:
             fields["title"], remainder = found
-            journal = _journal_after(remainder)
-            if journal:
-                fields["journal"] = journal
+            journal, tail = _split_journal(remainder)
+            _set_container(fields, journal)
+            fields.update(_locators(tail))
         names = _apa_authors(authors) or _generic_authors(authors)
         if names:
             fields["authors"] = names
+    elif ieee and _initials_first_authors(ieee["a"]) and _quoted_title(ieee["rest"]):
+        style = "IEEE"
+        fields["authors"] = _initials_first_authors(ieee["a"])
+        title, remainder = _quoted_title(ieee["rest"]) or ("", "")
+        fields["title"] = title
+        years = YEAR_ANYWHERE.findall(remainder)
+        if years:
+            fields["year"] = years[-1]
+        conference = re.match(rf"in\s+(?P<j>.+?),\s*(?:[A-Z][a-z]{{2,3}}\.?\s*)?{YEAR}", remainder)
+        if conference:
+            _set_container(fields, _squash(conference["j"]))
+            fields["type"] = "paper-conference"
+            fields.update(_locators(remainder[conference.end() :]))
+        else:
+            journal, tail = _split_journal(remainder)
+            _set_container(fields, journal)
+            fields.update(_locators(tail))
     elif chicago and _quoted_title(chicago["rest"]):
         style = "Chicago author-date"
         fields["year"] = chicago["y"]
         title, remainder = _quoted_title(chicago["rest"]) or ("", "")
         fields["title"] = title
-        journal = _journal_after(remainder, volume_follows_name=True)
-        if journal:
-            fields["journal"] = journal
-        names = _generic_authors(chicago["a"])
+        journal, tail = _split_journal(remainder, volume_follows_name=True)
+        _set_container(fields, journal)
+        fields.update(_locators(tail))
+        names = _generic_authors(chicago["a"]) or _first_inverted_authors(chicago["a"])
         if names:
             fields["authors"] = names
     elif mla and _quoted_title(mla["rest"]):
         style = "MLA"
         title, remainder = _quoted_title(mla["rest"]) or ("", "")
         fields["title"] = title
-        journal = _journal_after(remainder)
-        if journal:
-            fields["journal"] = journal
+        journal, tail = _split_journal(remainder)
+        _set_container(fields, journal)
+        fields.update(_locators(tail))
         years = YEAR_ANYWHERE.findall(remainder)
         if years:
             fields["year"] = years[0]
-        names = _generic_authors(mla["a"])
+        names = _generic_authors(mla["a"]) or _first_inverted_authors(mla["a"])
         if names:
             fields["authors"] = names
     elif vancouver:
-        style = "Vancouver"
+        style = "Vancouver or AMA"
         fields["authors"] = _vancouver_authors(vancouver["a"])
         fields["title"] = _squash(vancouver["t"]).rstrip(".")
-        fields["journal"] = _squash(vancouver["j"])
+        _set_container(fields, _squash(vancouver["j"]))
         fields["year"] = vancouver["y"]
+        fields.update(_locators(body[vancouver.end("y") :]))
     fields = {k: v for k, v in fields.items() if v}
     return {"style": style, "fields": fields}
 

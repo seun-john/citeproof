@@ -115,6 +115,7 @@ def test_pasted_text_example(open_page: Any, shot: Any) -> None:
     expect(page.locator(".tile.no_verdict .big")).to_have_text("5 of 7")
     text = results_text(s)
     assert "pasted text" in text and "not part of CiteProof" in text
+    assert "APA or Harvard \u00d74" in page.inner_text(".meta")  # the layouts that were recognised
     assert text.count("Possible match by title (advisory)") == 2
     assert "did not change the verdict" in text
     assert "initials" in text and "shortened list" in text
@@ -615,3 +616,122 @@ def test_filters_show_only_what_was_asked_for(open_page: Any) -> None:
     assert items.filter(visible=True).count() == 2
     page.click("[data-filter='all']")
     assert items.filter(visible=True).count() == 10
+
+
+# ----------------------------------------------------------------------- reformatting
+
+
+def open_reformat(session: Any) -> None:
+    session.page.locator("#reformat > summary").click()
+
+
+def test_reformatting_loads_the_style_engine_only_when_used_and_sends_nothing(
+    open_page: Any, shot: Any
+) -> None:
+    s = open_page()
+    load_sample(s, "sample-references-text.txt")
+    s.check()
+    expect(s.page.locator(".tile")).to_have_count(3)
+    assert not any("lxml" in r.url for r in s.requests)  # not downloaded at start-up or on Check
+    open_reformat(s)
+    expect(s.page.locator("#style-pick")).to_be_visible()
+    s.page.click("#reformat-go")
+    expect(s.page.locator(".bib li").first).to_be_visible(timeout=120_000)
+    assert any("lxml" in r.url for r in s.requests)
+    assert s.hosts() <= ALLOWED_HOSTS, s.hosts()
+    assert not any("crossref" in r.url for r in s.requests)
+    assert {r.method for r in s.requests} == {"GET"} and not any(r.post_data for r in s.requests)
+    assert s.errors == []
+    shot(s.page, "reformat-apa-desktop-light")
+
+
+def test_reformatting_shows_the_style_notes_and_keeps_italics(open_page: Any) -> None:
+    s = open_page()
+    load_sample(s, "sample-references-text.txt")
+    s.check()
+    open_reformat(s)
+    s.page.click("#reformat-go")
+    expect(s.page.locator("#reformat-h")).to_contain_text("APA 7th edition", timeout=120_000)
+    entries = s.page.locator(".bib-entry")
+    assert entries.count() >= 5
+    first = entries.first
+    assert first.locator("i").count() >= 1  # journal name in italics
+    text = s.page.inner_text(".formatted")
+    assert "Check it against your style guide" in text or "Formatted automatically" in text
+    # Each formatted reference still shows CiteProof's verdict, and formatting is not verification.
+    assert s.page.locator(".bib-meta .badge").count() >= 5
+    open_text = results_text(s)
+    assert "does not check that a reference is real" in open_text
+    assert "sentence case" in open_text  # the APA caveat
+
+
+def test_switching_style_renumbers_and_the_list_can_be_copied_and_downloaded(
+    open_page: Any, tmp_path: Path
+) -> None:
+    s = open_page()
+    load_sample(s, "sample-references-text.txt")
+    s.check()
+    open_reformat(s)
+    s.page.select_option("#style-pick", "ieee")
+    s.page.click("#reformat-go")
+    expect(s.page.locator("#reformat-h")).to_contain_text("IEEE", timeout=120_000)
+    texts = s.page.locator(".bib-entry").all_inner_texts()
+    assert texts[0].startswith("[1] ") and texts[1].startswith("[2] ")
+    with s.page.expect_download() as info:
+        s.page.click("#download-formatted")
+    saved = tmp_path / info.value.suggested_filename
+    info.value.save_as(saved)
+    assert saved.name == "citeproof-references-ieee.txt"
+    lines = saved.read_text(encoding="utf-8").strip().splitlines()
+    assert lines[0].startswith("[1] ") and len(lines) == len(texts)
+    s.page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+    s.page.click("#copy-formatted")
+    expect(s.page.locator("#reformat-status")).to_contain_text("Copied", timeout=10_000)
+    assert s.page.evaluate("navigator.clipboard.readText()").splitlines()[0].startswith("[1] ")
+
+
+def test_references_that_cannot_be_formatted_are_listed_with_a_reason(open_page: Any) -> None:
+    s = open_page()
+    s.check(
+        "Smith, J. (2020). A book about things nobody reads. Some Publisher.\n"
+        "Doe, A. (2021). A paper about something. Journal of Things, 4(2), 1-10."
+    )
+    open_reformat(s)
+    s.page.click("#reformat-go")
+    expect(s.page.locator(".bib li")).to_have_count(1, timeout=120_000)
+    skipped = s.page.locator(".formatted details", has_text="Not formatted")
+    expect(skipped).to_contain_text("may be a book")
+
+
+def test_reformat_uses_the_text_that_was_checked_not_later_edits(open_page: Any) -> None:
+    s = open_page()
+    s.check(LAYOUT_ONE)
+    s.page.fill("#refs", "Totally different text that was never checked. (1999). Nothing.")
+    open_reformat(s)
+    s.page.click("#reformat-go")
+    expect(s.page.locator(".bib-entry").first).to_contain_text(
+        "Why most published", timeout=120_000
+    )
+
+
+LAYOUT_ONE = (
+    "Ioannidis, J. P. A. (2005). Why most published research findings are false. "
+    "PLoS Medicine, 2(8), e124. https://doi.org/10.1371/journal.pmed.0020124"
+)
+
+
+def test_mixed_styles_can_be_unified_into_one(open_page: Any, shot: Any) -> None:
+    s = open_page()
+    load_sample(s, "sample-references-mixed.txt")
+    s.check()
+    meta = s.page.inner_text(".meta")
+    for layout in ("Chicago author-date", "IEEE", "MLA", "Vancouver or AMA", "APA or Harvard"):
+        assert layout in meta, meta
+    open_reformat(s)
+    s.page.select_option("#style-pick", "mla")
+    s.page.click("#reformat-go")
+    expect(s.page.locator("#reformat-h")).to_contain_text("MLA 9th edition", timeout=120_000)
+    entries = s.page.locator(".bib-entry").all_inner_texts()
+    assert len(entries) == 6
+    assert all(" vol. " in e or "Proceedings" in e for e in entries), entries
+    shot(s.page, "reformat-mixed-to-mla-desktop-light")

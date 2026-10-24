@@ -168,6 +168,23 @@ def main() -> int:
     )
     (DATA / "sample-references-text.txt").write_text(text, encoding="utf-8")
 
+    mixed = [
+        "McKinney, Wes. 2010. \u201cData Structures for Statistical Computing in Python.\u201d "
+        "Proceedings of the 9th Python in Science Conference, 56\u201361. "
+        "https://doi.org/10.25080/Majora-92bf1922-00a",
+        "Waskom, M.L. (2021) \u2018seaborn: statistical data visualization\u2019, Journal of Open "
+        "Source Software, 6(60), p. 3021. https://doi.org/10.21105/joss.03021",
+        "J. P. A. Ioannidis, \u201cWhy most published research findings are false,\u201d PLoS "
+        "Medicine, vol. 2, no. 8, p. e124, Aug. 2005, doi: 10.1371/journal.pmed.0020124.",
+        "Hunter, J. D. \u201cMatplotlib: A 2D Graphics Environment.\u201d Computing in Science & "
+        "Engineering, vol. 9, no. 3, 2007, pp. 90\u201395. https://doi.org/10.1109/MCSE.2007.55",
+        "Harris CR, Millman KJ, van der Walt SJ, et al. Array programming with NumPy. Nature. "
+        "2020;585(7825):357-362. doi:10.1038/s41586-020-2649-2",
+        "Pedregosa, F., Varoquaux, G., Gramfort, A., & Michel, V. (2011). Scikit-learn: Machine "
+        "learning in Python. Journal of Machine Learning Research, 12, 2825\u20132830.",
+    ]
+    (DATA / "sample-references-mixed.txt").write_text("\n".join(mixed) + "\n", encoding="utf-8")
+
     example_json = {
         "references": [
             {
@@ -199,7 +216,7 @@ def main() -> int:
     }
     text = json.dumps(example_json, indent=2, ensure_ascii=False) + "\n"
     (DATA / "sample-references.json").write_text(text, encoding="utf-8")
-    print("Wrote 4 example files to docs/data/")
+    print("Wrote 5 example files to docs/data/")
     return 0
 
 

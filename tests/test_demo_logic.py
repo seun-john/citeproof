@@ -633,7 +633,7 @@ def test_headings_and_non_references_are_skipped_and_reported() -> None:
 def test_text_with_a_matching_doi_and_full_names_can_be_verified() -> None:
     chicago = (
         "McKinney, Wes. 2010. \u201cData Structures for Statistical Computing in Python.\u201d "
-        "Proceedings of the 9th Python in Science Conference 445: 56\u201361. "
+        "Proceedings of the 9th Python in Science Conference, 56\u201361. "
         "https://doi.org/10.25080/Majora-92bf1922-00a"
     )
     result = check(chicago, CATALOGUE)
@@ -899,3 +899,327 @@ def test_the_catalogue_label_says_how_many_records_came_from_crossref() -> None:
     result = check(numpy_bib_without_doi() + "@misc{x, title={T}}", [REC], extra_records=[extra])
     assert result["catalogue_label"] == "test catalogue + 1 from Crossref"
     assert result["catalogue_size"] == 2
+
+
+# ---------------------------------------------------------------- more layouts, volume and pages
+
+LAYOUTS = {
+    "apa": (
+        "Ioannidis, J. P. A. (2005). Why most published research findings are false. "
+        "PLoS Medicine, 2(8), e124. https://doi.org/10.1371/journal.pmed.0020124",
+        "APA or Harvard",
+        ["Ioannidis, J. P. A."],
+    ),
+    "chicago": (
+        "Harris, Charles R., Jarrod Millman, and Stéfan van der Walt. 2020. "
+        "“Array Programming with NumPy.” Nature 585 (7825): 357–62.",
+        "Chicago author-date",
+        ["Harris, Charles R.", "Millman, Jarrod", "van der Walt, Stéfan"],
+    ),
+    "mla": (
+        "Ioannidis, John P. A. “Why Most Published Research Findings Are False.” "
+        "PLoS Medicine, vol. 2, no. 8, 2005, p. e124.",
+        "MLA",
+        ["Ioannidis, John P. A"],
+    ),
+    "ieee": (
+        "J. P. A. Ioannidis, “Why most published research findings are false,” "
+        "PLoS Medicine, vol. 2, no. 8, p. e124, Aug. 2005, doi: 10.1371/journal.pmed.0020124.",
+        "IEEE",
+        ["Ioannidis, J. P. A."],
+    ),
+    "ama": (
+        "Ioannidis JPA. Why most published research findings are false. PLoS Medicine. "
+        "2005;2(8):e124. doi:10.1371/journal.pmed.0020124",
+        "Vancouver or AMA",
+        ["Ioannidis JPA"],
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(LAYOUTS))
+def test_each_layout_gives_volume_issue_and_pages(name: str) -> None:
+    raw, style, authors = LAYOUTS[name]
+    found = text_references.read_entry(raw)
+    fields = found["fields"]
+    assert found["style"] == style
+    assert fields["authors"] == authors
+    assert fields["journal"] == "PLoS Medicine" or name == "chicago"
+    if name != "chicago":
+        assert (fields["volume"], fields["issue"], fields["pages"]) == ("2", "8", "e124")
+        assert fields["year"] == "2005"
+    else:
+        assert (fields["volume"], fields["issue"], fields["pages"]) == ("585", "7825", "357–362")
+
+
+def test_shortened_page_ranges_are_written_out() -> None:
+    assert text_references._expand_pages("357-62") == "357–362"
+    assert text_references._expand_pages("2825-30") == "2825–2830"
+    assert text_references._expand_pages("e124") == "e124"
+    assert text_references._expand_pages("56–61") == "56–61"
+
+
+def test_conference_papers_are_recognised() -> None:
+    apa = text_references.read_entry(
+        "McKinney, W. (2010). Data structures for statistical computing in Python. "
+        "Proceedings of the 9th Python in Science Conference, 56–61."
+    )["fields"]
+    assert apa["type"] == "paper-conference" and apa["pages"] == "56–61"
+    ieee = text_references.read_entry(
+        "W. McKinney, “Data structures for statistical computing in Python,” in Proc. "
+        "9th Python in Science Conf., 2010, pp. 56–61."
+    )["fields"]
+    assert (
+        ieee["type"] == "paper-conference"
+        and ieee["journal"] == "Proc. 9th Python in Science Conf."
+    )
+
+
+def test_a_numbered_ieee_list_is_read_as_ieee() -> None:
+    parsed = text_references.parse_text_references(
+        "[1] " + LAYOUTS["ieee"][0] + "\n[2] " + LAYOUTS["ieee"][0].replace("2005", "2006")
+    )
+    assert [parsed["read"][r["id"]]["style"] for r in parsed["references"]] == ["IEEE", "IEEE"]
+
+
+def test_bibtex_volume_number_and_pages_are_kept_for_reformatting_only() -> None:
+    bib = BIB.replace(
+        "  doi = {10.1/x}",
+        "  volume = {4},\n  number = {2},\n  pages = {357--362},\n  doi = {10.1/x}",
+    )
+    parsed = demo.parse_references(bib)
+    ref = parsed["references"][0]
+    assert (ref["volume"], ref["issue"], ref["pages"]) == ("4", "2", "357–362")
+    # CiteProof's own comparison is unaffected by the extra fields.
+    assert check(bib)["rows"][0]["verdict"] == check(BIB)["rows"][0]["verdict"] == "VERIFIED"
+
+
+def test_crossref_records_carry_volume_issue_pages_and_type() -> None:
+    message = {
+        **CROSSREF["message"],
+        "volume": "2",
+        "issue": "8",
+        "page": "e124",
+        "type": "journal-article",
+    }
+    record = demo.crossref_to_record({"message": message}, "2026-10-24")
+    assert (record["volume"], record["issue"], record["pages"]) == ("2", "8", "e124")
+    assert record["type"] == "article-journal"
+    chapter = demo.crossref_to_record(
+        {"message": {**message, "type": "book-chapter"}}, "2026-10-24"
+    )
+    assert chapter["type"] == "other:book-chapter"
+    assert "volume%2Cissue%2Cpage%2Ctype" in demo.crossref_search_url("x")
+
+
+# ---------------------------------------------------------------- reformatting into another style
+
+IOANNIDIS = (
+    "Ioannidis, J. P. A. (2005). Why most published research findings are false. PLoS Medicine, "
+    "2(8), e124. https://doi.org/10.1371/journal.pmed.0020124"
+)
+EXPECTED = {
+    "apa": IOANNIDIS,
+    "mla": (
+        "Ioannidis, J. P. A. “Why Most Published Research Findings Are False.” PLoS "
+        "Medicine, vol. 2, no. 8, 2005, p. e124, https://doi.org/10.1371/journal.pmed.0020124."
+    ),
+    "chicago-author-date": (
+        "Ioannidis, J. P. A. 2005. “Why Most Published Research Findings Are False.” PLoS "
+        "Medicine 2 (8): e124. https://doi.org/10.1371/journal.pmed.0020124."
+    ),
+    "harvard": (
+        "Ioannidis, J.P.A. (2005) ‘Why most published research findings are false’, PLoS "
+        "Medicine, 2(8), p. e124. Available at: https://doi.org/10.1371/journal.pmed.0020124."
+    ),
+    "ieee": (
+        "[1] J. P. A. Ioannidis, “Why most published research findings are false,” PLoS "
+        "Medicine, vol. 2, no. 8, p. e124, 2005, doi: 10.1371/journal.pmed.0020124."
+    ),
+    "ama": (
+        "1. Ioannidis JPA. Why most published research findings are false. PLoS Medicine. "
+        "2005;2(8):e124. doi:10.1371/journal.pmed.0020124"
+    ),
+}
+
+
+@pytest.fixture
+def engine() -> None:
+    pytest.importorskip("lxml")
+
+
+@pytest.mark.parametrize("style_id", list(EXPECTED))
+def test_every_style_formats_a_journal_article(engine: None, style_id: str) -> None:
+    result = demo.reformat(IOANNIDIS, CATALOGUE, None, None, style_id)
+    assert [e["text"] for e in result["entries"]] == [EXPECTED[style_id]]
+    assert result["skipped"] == []
+    assert result["style"] == demo.styles.STYLES[style_id][0]
+
+
+def test_the_journal_name_is_italic_and_nothing_else_is_html(engine: None) -> None:
+    entry = demo.reformat(IOANNIDIS, CATALOGUE, None, None, "apa")["entries"][0]
+    italic = [s["text"] for s in entry["segments"] if s["italic"]]
+    assert (
+        "PLoS Medicine" in italic and "".join(s["text"] for s in entry["segments"]) == entry["text"]
+    )
+    assert "<" not in entry["text"] and "&amp;" not in entry["text"]
+
+
+def test_numbered_styles_keep_the_input_order_and_author_date_styles_sort(engine: None) -> None:
+    text = (
+        f"{IOANNIDIS}\nAdams, B. (2001). An earlier paper by an earlier author. J Test, 1(1), 1-2."
+    )
+    apa = demo.reformat(text, CATALOGUE, None, None, "apa")
+    assert [e["id"] for e in apa["entries"]] == ["ref2", "ref1"]  # Adams before Ioannidis
+    ieee = demo.reformat(text, CATALOGUE, None, None, "ieee")
+    assert [e["text"][:3] for e in ieee["entries"]] == ["[1]", "[2]"]
+    assert ieee["numbered"] is True and apa["numbered"] is False
+
+
+def test_us_styles_put_punctuation_inside_quotes_and_british_harvard_does_not(engine: None) -> None:
+    mla = demo.reformat(IOANNIDIS, CATALOGUE, None, None, "mla")["entries"][0]["text"]
+    harvard = demo.reformat(IOANNIDIS, CATALOGUE, None, None, "harvard")["entries"][0]["text"]
+    assert "False.”" in mla and "false’," in harvard
+
+
+def test_a_record_with_the_same_doi_completes_names_and_fills_gaps(engine: None) -> None:
+    record = {
+        "doi": "10.1371/journal.pmed.0020124",
+        "title": "Why most published research findings are false",
+        "authors": ["Ioannidis, John P. A."],
+        "year": "2005",
+        "journal": "PLoS Medicine",
+        "volume": "2",
+        "issue": "8",
+        "pages": "e124",
+    }
+    sparse = "Ioannidis, J. P. A. (2005). Why most published research findings are false. https://doi.org/10.1371/journal.pmed.0020124"
+    without = demo.reformat(sparse, [REC], None, None, "mla")
+    assert without["entries"] == [] and "journal" in without["skipped"][0]["reason"]
+    full = demo.reformat(sparse, [record], None, None, "mla")["entries"][0]
+    assert "Ioannidis, John P. A." in full["text"] and "vol. 2, no. 8" in full["text"]
+    assert any("Filled from the catalogue record" in n for n in full["notes"])
+    assert any("taken in full" in n for n in full["notes"])
+
+
+def test_notes_say_what_is_missing_or_shortened(engine: None) -> None:
+    text = (
+        "Harris, C. R., Millman, K. J., van der Walt, S. J., et al. (2020). Array programming "
+        "with NumPy. Nature, 585(7825)."
+    )
+    entry = demo.reformat(text, [REC], None, None, "apa")["entries"][0]
+    joined = " ".join(entry["notes"])
+    assert "shortened the author list" in joined
+    assert "No page numbers" in joined and "No DOI" in joined and "No volume" not in joined
+
+
+def test_sentence_case_styles_warn_about_title_case_and_headline_styles_do_not(
+    engine: None,
+) -> None:
+    text = (
+        "Harris, Charles R. 2020. “Array Programming With Numerical Python Arrays.” "
+        "Nature 585 (7825): 357–62."
+    )
+    apa = demo.reformat(text, [REC], None, None, "apa")["entries"][0]["notes"]
+    mla = demo.reformat(text, [REC], None, None, "mla")["entries"][0]["notes"]
+    assert any("Title Case" in n for n in apa) and not any("Title Case" in n for n in mla)
+
+
+def test_books_and_incomplete_references_are_skipped_with_a_reason(engine: None) -> None:
+    book = {**REC, "doi": "10.5555/book", "type": "other:book", "title": "A Book About Things"}
+    text = "Smith, J. (2020). A book about things. https://doi.org/10.5555/book"
+    result = demo.reformat(text, [book], None, None, "apa")
+    assert result["entries"] == [] and "book" in result["skipped"][0]["reason"]
+    none = demo.reformat(
+        "Smith, J. (2020). Something with no journal at all.", [REC], None, None, "apa"
+    )
+    assert none["skipped"][0]["reason"].startswith("missing")
+
+
+def test_formatting_is_not_verification(engine: None) -> None:
+    result = demo.reformat(IOANNIDIS, CATALOGUE, None, None, "apa")
+    assert any("does not check that a reference is real" in c for c in result["caveats"])
+    assert any("Check it against your style guide" in c for c in result["caveats"])
+    assert any("sentence case" in c for c in result["caveats"])
+
+
+def test_a_retracted_work_is_flagged_when_reformatted(engine: None) -> None:
+    hwang = next(r for r in CATALOGUE if r["retracted"])
+    text = (
+        f"Hwang, W. S. (2005). {hwang['title']}. {hwang['journal']}, 308(5729), 1777\u20131783. "
+        f"https://doi.org/{hwang['doi']}"
+    )
+    entry = demo.reformat(text, CATALOGUE, None, None, "apa")["entries"][0]
+    assert any("retracted" in n for n in entry["notes"])
+
+
+def test_reformat_errors_are_readable(engine: None) -> None:
+    with pytest.raises(demo.DemoError, match="Unknown citation style"):
+        demo.reformat(IOANNIDIS, CATALOGUE, None, None, "nope")
+    with pytest.raises(demo.DemoError) as caught:
+        demo.reformat("", CATALOGUE, None, None, "apa")
+    assert caught.value.title == "Nothing to check yet"
+
+
+def test_reformat_api_and_plain_text_download(engine: None) -> None:
+    out = json.loads(demo.api_reformat(IOANNIDIS, json.dumps(CATALOGUE), "", "", "ama"))
+    assert out["ok"] is True and out["entries"][0]["text"].startswith("1. Ioannidis JPA.")
+    assert demo.results_to_text(out).endswith("\r\n")
+    bad = json.loads(demo.api_reformat(IOANNIDIS, json.dumps(CATALOGUE), "", "", "zzz"))
+    assert bad["ok"] is False
+    styles_list = json.loads(demo.api_styles())
+    assert [s["id"] for s in styles_list] == list(demo.styles.STYLES)
+
+
+def test_vendored_style_files_and_notices_are_present() -> None:
+    csl = ROOT / "docs" / "csl"
+    for style_id, (_label, filename, _locale) in demo.styles.STYLES.items():
+        assert (csl / filename).is_file(), style_id
+    notice = (csl / "NOTICE.md").read_text(encoding="utf-8")
+    assert "CC BY-SA 3.0" in notice and "BSD 2-Clause" in notice
+    assert (ROOT / "docs" / "py" / "citeproc" / "LICENSE").is_file()
+
+
+def test_something_that_looks_like_a_book_is_not_formatted_as_an_article(engine: None) -> None:
+    book = "Smith, J. (2020). A book about things nobody reads. Some Publisher."
+    result = demo.reformat(book, [REC], None, None, "apa")
+    assert result["entries"] == []
+    assert "may be a book" in result["skipped"][0]["reason"]
+
+
+def test_the_recognised_layouts_are_counted_for_the_results_header() -> None:
+    result = check(TEXT, CATALOGUE)
+    assert result["layouts_read"] == {
+        "APA or Harvard": 4,
+        "MLA": 1,
+        "Vancouver or AMA": 1,
+        "not recognised": 1,
+    }
+    assert check(BIB, [REC])["layouts_read"] == {}
+
+
+def test_harvard_keeps_volume_and_issue_before_the_page_marker() -> None:
+    fields = text_references.read_entry(
+        "Waskom, M.L. (2021) \u2018seaborn: statistical data visualization\u2019, "
+        "Journal of Open Source Software, 6(60), p. 3021."
+    )["fields"]
+    assert (fields["volume"], fields["issue"], fields["pages"]) == ("6", "60", "3021")
+
+
+def test_the_mixed_styles_example_reads_five_layouts_and_formats_every_reference(
+    engine: None,
+) -> None:
+    mixed = (DATA / "sample-references-mixed.txt").read_text(encoding="utf-8")
+    result = check(mixed, CATALOGUE)
+    assert set(result["layouts_read"]) == {
+        "Chicago author-date",
+        "APA or Harvard",
+        "IEEE",
+        "MLA",
+        "Vancouver or AMA",
+    }
+    formatted = demo.reformat(mixed, CATALOGUE, None, None, "apa")
+    assert len(formatted["entries"]) == 6 and formatted["skipped"] == []
+    assert not any("445" in e["text"] for e in formatted["entries"])  # nothing invented
+    for entry in formatted["entries"]:
+        assert re.match(r"^[^,]+, [A-Z]\..*\(\d{4}\)\.", entry["text"]), entry["text"]
