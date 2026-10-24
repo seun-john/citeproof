@@ -242,9 +242,9 @@ def parse_references(text: str) -> dict[str, Any]:
                 "catalogue": None,
             }
             notices.append(
-                "BibTeX input: every entry is treated as cited, exactly as CiteProof's "
-                "from-bibtex does, so the uncited and missing-reference checks cannot trigger. "
-                'Use JSON with a "citations" list to use them.'
+                "BibTeX: every entry is treated as cited, as in CiteProof's from-bibtex, so the "
+                "uncited and missing-reference checks cannot trigger. Use JSON with a "
+                '"citations" list to use them.'
             )
         else:
             parsed = _read_plain_text(stripped, notices)
@@ -269,12 +269,9 @@ def _read_plain_text(text: str, notices: list[str]) -> dict[str, Any]:
         )
     ids = [r["id"] for r in found["references"]]
     notices.append(
-        f"Plain text: found {len(ids)} reference(s). The demo's own reader split the text and "
-        "picked out the DOI, authors, year, title and journal where the layout was "
-        "recognised (APA, Harvard, Chicago, MLA, Vancouver). This reader is not part of "
-        'CiteProof and is best effort: open "How this was read" on a card to see what '
-        "it took from your text. Anything it could not read is left out, not guessed, and "
-        "CiteProof then reports it as missing. Every entry is treated as cited."
+        f"Plain text: found {len(ids)} reference(s), read by this page's own reader (not part "
+        'of CiteProof). Open "Details" on a card to see how it was read. Fields it cannot '
+        "read are left out, not guessed. Every entry is treated as cited."
     )
     if found["skipped"]:
         shown = "; ".join(f"\u201c{t[:60]}\u201d" for t in found["skipped"][:3])
@@ -629,10 +626,10 @@ def build_result(
                     {
                         "label": "Possible match by title (advisory)",
                         "value": (
-                            f"The catalogue record \u201c{hit.get('title')}\u201d "
-                            f"(DOI {hit.get('doi')}, {hit.get('year', 'year not given')}) has this "
+                            f"The catalogue has \u201c{hit.get('title')}\u201d "
+                            f"(DOI {hit.get('doi')}, {hit.get('year', 'no year')}) with this "
                             f"title.{other} CiteProof matches by DOI only, so this did not change "
-                            "the verdict. A person should check whether it is the same work."
+                            "the verdict. A person should check."
                         ),
                     }
                 )
@@ -735,16 +732,15 @@ def run_check(
         parsed["references"], parsed["chosen"] = references, chosen
         if chosen:
             notices.append(
-                f"{len(chosen)} DOI(s) were added by you from a Crossref title search. "
-                "They are marked on the cards; they were not in your pasted references."
+                f"{len(chosen)} DOI(s) were added by you from a Crossref title search; "
+                "they were not in your pasted references."
             )
     embedded = parsed["catalogue"]
     if embedded is not None:
         records = embedded
         label = "the catalogue inside your pasted JSON"
         notices.append(
-            'Your pasted JSON has its own "catalogue", so that is used instead of the one '
-            "selected above."
+            'Your pasted JSON has its own "catalogue", which is used instead of the one selected.'
         )
     else:
         records = list(catalogue_records or [])

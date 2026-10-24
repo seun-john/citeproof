@@ -90,7 +90,7 @@ async function startEngine() {
     state.demo = pyodide.pyimport("demo_logic");
     const info = JSON.parse(state.demo.api_info());
     $("cp-version").textContent = info.citeproof_version;
-    setEngine(`Ready. CiteProof ${info.citeproof_version} is running in this tab (Python ${info.python}).`, true);
+    setEngine(`Ready \u00b7 CiteProof ${info.citeproof_version} runs in this tab`, true);
     await prepareSampleCatalogue();
     $("check-btn").disabled = false;
     $("check-hint").textContent = "";
@@ -129,6 +129,7 @@ async function onCatalogueFile(event) {
   const status = $("cat-status");
   if (!file) return;
   $("cat-file").checked = true;
+  $("file-row").hidden = false;
   if (file.size > MAX_CATALOGUE_BYTES) {
     status.textContent = `That file is ${(file.size / 1e6).toFixed(1)} MB; this demo accepts up to 8 MB. Try a smaller extract.`;
     event.target.value = "";
@@ -151,6 +152,7 @@ async function onCatalogueFile(event) {
       parsed.error.hint ? ` ${parsed.error.hint}` : "");
     event.target.value = "";
     $("cat-sample").checked = true;
+    $("file-row").hidden = true;
     return;
   }
   state.file = { label: `your file ${file.name}`, records: parsed.records, notices: parsed.notices };
@@ -172,36 +174,49 @@ function renderError(error) {
     error.detail ? h("details", {}, h("summary", { text: "Technical detail" }), h("p", { text: error.detail })) : null);
 }
 
-function tile(kind, name, status, summary, what) {
+const SECONDARY = new Set(["Catalogue searched", "Catalogue provenance", "Compared"]);
+
+function tile(kind, name, summary, what) {
   const part = summary[kind];
   return h("li", { class: `tile ${kind}` },
     h("div", { class: "big", text: `${part.count} of ${summary.total}` }),
     h("div", { class: "pct", text: `${part.percent}%` }),
     h("div", { class: "name", text: name }),
-    h("p", { class: "what" }, h("code", { text: status }), " — ", what));
+    h("p", { class: "what", text: what }));
 }
 
 function badgeClass(verdict) {
   return verdict.toLowerCase();
 }
 
+function evidenceList(items) {
+  return h("dl", { class: "evidence" }, items.map((e) => [h("dt", { text: e.label }), h("dd", { text: e.value })]));
+}
+
 function renderRow(row) {
-  return h("li", {},
+  const main = row.evidence.filter((e) => !SECONDARY.has(e.label));
+  const more = row.evidence.filter((e) => SECONDARY.has(e.label));
+  return h("li", { "data-verdict": row.verdict, "data-flagged": row.flags.length ? "yes" : "no" },
     h("article", { class: `ref ${badgeClass(row.verdict)}`, "aria-label": `Reference ${row.id}` },
       h("div", { class: "ref-head" },
         h("span", { class: "ref-id", text: row.id }),
         h("span", { class: `badge ${badgeClass(row.verdict)}`, text: row.verdict }),
         row.flags.map((f) => h("span", { class: "badge flag", text: f.status })),
         row.doi_chosen ? h("span", { class: "badge needs_review", text: "DOI added by you" }) : null,
-        row.from_crossref && !row.doi_chosen ? h("span", { class: "badge needs_review", text: "live Crossref record" }) : null),
+        row.from_crossref && !row.doi_chosen ? h("span", { class: "badge needs_review", text: "Crossref record" }) : null),
       h("p", { class: "ref-title", text: row.title || "(no title in your reference)" }),
-      h("p", { class: "headline", text: row.headline }),
-      h("p", { class: "says" }, h("span", { class: "label", text: "CiteProof says: " }), `“${row.message}”`),
-      h("dl", { class: "evidence" }, row.evidence.map((e) => [h("dt", { text: e.label }), h("dd", { text: e.value })])),
-      row.read ? renderRead(row.read) : null,
-      renderCandidates(row),
+      h("p", { class: `headline ${badgeClass(row.verdict)}`, text: row.headline }),
+      evidenceList(main),
       row.flags.length ? h("ul", { class: "flag-list" }, row.flags.map((f) => h("li", {},
-        h("strong", { text: `${f.status}: ` }), `“${f.message}”`, f.note ? ` ${f.note}` : ""))) : null,
+        h("strong", { text: `${f.status}: ` }), f.note || f.message))) : null,
+      renderCandidates(row),
+      h("details", { class: "more" },
+        h("summary", { text: "Details" }),
+        h("p", { class: "subhead", text: "CiteProof says" }),
+        h("p", { class: "says", text: `“${row.message}”` }),
+        row.flags.map((f) => h("p", { class: "says", text: `${f.status}: “${f.message}”` })),
+        more.length ? [h("p", { class: "subhead", text: "More evidence" }), evidenceList(more)] : null,
+        row.read ? renderRead(row.read) : null),
       h("p", { class: "person", text: row.person_note })));
 }
 
@@ -209,20 +224,20 @@ function renderCandidates(row) {
   const found = state.candidates[row.id];
   if (!found || row.doi_chosen) return null;
   if (!found.length) {
-    return h("div", { class: "candidates" }, h("p", { class: "help", text: "Crossref's title search returned no possible matches for this reference." }));
+    return h("div", { class: "candidates" }, h("p", { class: "hint", text: "Crossref's title search returned no possible matches." }));
   }
   return h("div", { class: "candidates" },
-    h("h4", { text: "Possible DOIs found by Crossref (suggestions, not checked)" }),
-    h("p", { class: "help", text: "Crossref matched on your title, first author and year. These may be different works with similar titles. Read each one. Nothing is chosen for you." }),
+    h("p", { class: "subhead", text: "Possible DOIs from Crossref" }),
+    h("p", { class: "hint", text: "Suggestions only. They may be different works with similar titles. Nothing is chosen for you." }),
     h("ul", { class: "cand-list" }, found.map((c) => h("li", {},
       h("strong", { text: c.title }), h("br"),
-      `${c.authors} \u00b7 ${c.year} \u00b7 ${c.journal}`, h("br"),
+      `${c.authors} · ${c.year} · ${c.journal}`, h("br"),
       h("code", { text: c.doi }),
-      ` \u00b7 title similarity ${c.title_similarity} \u00b7 year ${c.year_matches ? "matches" : "differs or was not read"}`, h("br"),
+      ` · title similarity ${c.title_similarity} · year ${c.year_matches ? "matches" : "differs or was not read"}`, h("br"),
       h("button", {
-        type: "button", class: "btn", "aria-label": `Use DOI ${c.doi} for reference ${row.id} and check again`,
+        type: "button", class: "btn small", "aria-label": `Use DOI ${c.doi} for reference ${row.id} and check again`,
         "data-use-doi": c.doi, "data-ref": row.id,
-      }, "Use this DOI and check again")))));
+      }, "Use this DOI")))));
 }
 
 function useCandidate(refId, doi) {
@@ -234,20 +249,25 @@ function useCandidate(refId, doi) {
 }
 
 function renderRead(read) {
-  return h("details", { class: "read" },
-    h("summary", { text: "How this was read" }),
-    h("p", { class: "help" }, "Your text: ", h("q", { text: read.raw })),
-    h("p", { class: "help", text: `Layout recognised: ${read.style}. This reading is the demo's own, not CiteProof's. If a field is wrong or missing, fix the text and check again.` }),
-    h("dl", { class: "evidence" }, read.fields.map((f) => [h("dt", { text: f.label }), h("dd", { text: f.value })])));
+  return [
+    h("p", { class: "subhead", text: "How this was read" }),
+    h("p", { class: "hint" }, "Your text: ", h("q", { text: read.raw })),
+    h("p", { class: "hint", text: `Layout: ${read.style}. This page's own reader, not CiteProof's. Fix the text and check again if a field is wrong.` }),
+    evidenceList(read.fields),
+  ];
 }
 
 function renderMissing(item) {
-  return h("li", {},
+  return h("li", { "data-verdict": item.verdict, "data-flagged": "yes" },
     h("article", { class: "ref missing_reference", "aria-label": `Citation ${item.id}` },
       h("div", { class: "ref-head" },
         h("span", { class: "ref-id", text: item.id }),
         h("span", { class: "badge missing_reference", text: item.verdict })),
-      h("p", { class: "says" }, h("span", { class: "label", text: "CiteProof says: " }), `“${item.message}”`),
+      h("p", { class: "headline", text: "Cited in the text but not in the reference list." }),
+      h("details", { class: "more" },
+        h("summary", { text: "Details" }),
+        h("p", { class: "subhead", text: "CiteProof says" }),
+        h("p", { class: "says", text: `“${item.message}”` })),
       h("p", { class: "person", text: item.person_note })));
 }
 
@@ -257,39 +277,76 @@ function flagsLine(flags) {
     DUPLICATE: "duplicate",
     UNCITED_REFERENCE: "in the list but not cited",
     MISSING_REFERENCE: "cited but not in the list",
-    RETRACTION_STATUS_NOT_SUPPLIED: "catalogue gave no retraction status",
+    RETRACTION_STATUS_NOT_SUPPLIED: "no retraction status in the catalogue",
   };
   const parts = Object.entries(flags).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${names[k]}`);
-  return parts.length ? `Also flagged: ${parts.join(" · ")}.` : "No other flags.";
+  return parts.length ? `Also flagged: ${parts.join(" · ")}` : null;
+}
+
+function filterButtons(result) {
+  const s = result.summary;
+  const flagged = result.rows.filter((r) => r.flags.length).length + result.missing_references.length;
+  const defs = [
+    ["all", `All ${s.total + result.missing_references.length}`],
+    ["VERIFIED", `Verified ${s.verified.count}`],
+    ["METADATA_MISMATCH", `Mismatch ${s.metadata_mismatch.count}`],
+    ["NEEDS_REVIEW", `No verdict ${s.no_verdict.count}`],
+  ];
+  if (flagged) defs.push(["flagged", `Flagged ${flagged}`]);
+  return defs.map(([key, label]) => h("button", {
+    type: "button", class: "chip", "data-filter": key, "aria-pressed": key === "all" ? "true" : "false",
+  }, label));
+}
+
+function applyFilter(key) {
+  for (const button of document.querySelectorAll("[data-filter]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.filter === key));
+  }
+  for (const item of document.querySelectorAll(".refs > li")) {
+    const show = key === "all" || (key === "flagged" ? item.dataset.flagged === "yes" : item.dataset.verdict === key);
+    item.hidden = !show;
+  }
 }
 
 function renderResult(result) {
   const s = result.summary;
   const body = $("results-body");
+  const extra = flagsLine(s.other_flags);
   const kids = [
-    h("p", { class: "meta", text: `Checked ${s.total} reference${s.total === 1 ? "" : "s"} (${{ bibtex: "BibTeX", json: "JSON", text: "plain text" }[result.input_format]}) against ${result.catalogue_label} — ${result.catalogue_size} records — with CiteProof ${result.citeproof_version}.` }),
-    h("p", { class: "standing", text: "These are comparisons with one catalogue, not judgements. A person must decide what each result means." }),
-    h("p", { class: "summary-line", text: `Of ${s.total} reference${s.total === 1 ? "" : "s"}: ${s.verified.count} verified (${s.verified.percent}%) \u00b7 ${s.metadata_mismatch.count} metadata mismatch (${s.metadata_mismatch.percent}%) \u00b7 ${s.no_verdict.count} no verdict (${s.no_verdict.percent}%).` }),
-    ...result.notices.map((n) => h("p", { class: "notice", text: n })),
+    h("p", { class: "meta", text: `${s.total} reference${s.total === 1 ? "" : "s"} · ${result.catalogue_label} (${result.catalogue_size} records) · ${{ bibtex: "BibTeX", json: "JSON", text: "pasted text" }[result.input_format]} · CiteProof ${result.citeproof_version}` }),
+    h("p", { class: "banner", text: "These are comparisons, not judgements. A person must decide what each result means." }),
     h("ul", { class: "tiles", "aria-label": "Summary" },
-      tile("verified", "Verified", "VERIFIED", s, "the DOI was found and every compared field matches."),
-      tile("metadata_mismatch", "Metadata mismatch", "METADATA_MISMATCH", s, "the DOI was found but a field differs or is missing."),
-      tile("no_verdict", "No verdict", "NEEDS_REVIEW", s, "no DOI, or the DOI is not in this catalogue. This says nothing about whether the reference is real.")),
+      tile("verified", "Verified", s, "DOI found, all fields match"),
+      tile("metadata_mismatch", "Mismatch", s, "DOI found, a field differs"),
+      tile("no_verdict", "No verdict", s, "No DOI, or not in this catalogue")),
     h("div", { class: "bar", "aria-hidden": "true" }, ["verified", "metadata_mismatch", "no_verdict"].map((k) => {
       const seg = h("span", { class: k });
       seg.style.flexGrow = String(s[k].count);
       return seg;
     })),
-    h("p", { class: "flags-line", text: flagsLine(s.other_flags) }),
-    h("div", { class: "exports" },
-      h("button", { type: "button", class: "btn", id: "dl-csv" }, "Download results (CSV)"),
-      h("button", { type: "button", class: "btn", id: "dl-json" }, "Download CiteProof report (JSON)")),
+    extra ? h("p", { class: "flags-line", text: extra }) : null,
+    h("details", { class: "legend how" },
+      h("summary", { text: "What do these mean?" }),
+      h("ul", {},
+        h("li", {}, h("code", { text: "VERIFIED" }), " the DOI is in the catalogue and title, authors, year and journal all match."),
+        h("li", {}, h("code", { text: "METADATA_MISMATCH" }), " the DOI is in the catalogue but a field differs or is missing."),
+        h("li", {}, h("code", { text: "NEEDS_REVIEW" }), " no DOI, or the DOI is not in this catalogue. It says nothing about whether the reference is real."))),
+    result.notices.length ? h("details", { class: "notes" },
+      h("summary", { text: `Notes (${result.notices.length})` }),
+      result.notices.map((n) => h("p", { text: n }))) : null,
+    h("div", { class: "toolbar" },
+      h("div", { class: "filters", role: "group", "aria-label": "Show" }, filterButtons(result)),
+      h("div", { class: "exports" },
+        h("button", { type: "button", class: "btn small", id: "dl-csv" }, "Download CSV"),
+        h("button", { type: "button", class: "btn small", id: "dl-json" }, "Download report (JSON)"))),
+    h("ol", { class: "refs" }, result.rows.map(renderRow), result.missing_references.map(renderMissing)),
   ];
-  kids.push(h("h3", { text: "Reference by reference" }),
-    h("ol", { class: "refs" }, result.rows.map(renderRow), result.missing_references.map(renderMissing)));
-  body.replaceChildren(...kids);
+  body.replaceChildren(...kids.filter(Boolean));
   $("dl-csv").addEventListener("click", () => download("citeproof-results.csv", "text/csv", "﻿" + call("api_csv", JSON.stringify(result)).csv));
   $("dl-json").addEventListener("click", () => download("citeproof-report.json", "application/json", JSON.stringify(result.report, null, 2)));
+  for (const button of body.querySelectorAll("[data-filter]")) {
+    button.addEventListener("click", () => applyFilter(button.dataset.filter));
+  }
   for (const button of body.querySelectorAll("[data-use-doi]")) {
     button.addEventListener("click", () => useCandidate(button.dataset.ref, button.dataset.useDoi));
   }
@@ -360,22 +417,21 @@ function renderLookupPanel(result) {
   if (!$("crossref-on").checked) return;
   const { items, truncated, unusable } = result.lookup;
   const panel = h("section", { class: "lookup", id: "lookup-panel", "aria-labelledby": "lookup-h" });
-  panel.append(h("h3", { id: "lookup-h", text: "Crossref lookup (you turned this on)" }));
+  panel.append(h("h3", { id: "lookup-h", text: "Crossref DOI lookup" }));
   if (state.lookupLog) {
     panel.append(h("p", { text: "What happened:" }),
       h("ul", {}, state.lookupLog.map((l) => h("li", {}, h("code", { text: l.doi }), ` — ${l.text}`))));
   }
   if (items.length && !state.lookupLog) {
     panel.append(
-      h("p", {}, `Nothing has been sent. If you press the button below, this page will make ${items.length} request${items.length === 1 ? "" : "s"} to api.crossref.org, one at a time, with these addresses and nothing else:`),
+      h("p", {}, `Nothing has been sent. Pressing Send makes ${items.length} request${items.length === 1 ? "" : "s"} to api.crossref.org, one at a time, to exactly these addresses:`),
       h("ul", {}, items.map((i) => h("li", {}, h("code", { text: i.url })))),
-      h("p", { class: "help", text: "Crossref will also see your IP address and the usual request headers. No email address or key is used." }),
       h("div", { class: "exports" },
-        h("button", { type: "button", class: "btn primary", id: "lookup-go" }, `Send ${items.length} request${items.length === 1 ? "" : "s"} to Crossref`),
+        h("button", { type: "button", class: "btn", id: "lookup-go" }, `Send ${items.length} request${items.length === 1 ? "" : "s"}`),
         h("button", { type: "button", class: "btn", id: "lookup-cancel", hidden: true }, "Stop")),
-      h("p", { id: "lookup-progress", class: "help", role: "status", "aria-live": "polite" }));
+      h("p", { id: "lookup-progress", class: "hint", role: "status", "aria-live": "polite" }));
   } else if (!items.length && !state.lookupLog) {
-    panel.append(h("p", { text: "Nothing to look up: every reference with a DOI is already in the catalogue, or none has a DOI. Nothing was sent." }));
+    panel.append(h("p", { text: "Nothing to look up: every DOI is already in the catalogue, or none has one. Nothing was sent." }));
   }
   if (truncated) panel.append(h("p", { class: "notice", text: `${truncated} more DOI(s) are not shown. The demo looks up at most 25 at a time.` }));
   if (unusable.length) panel.append(h("p", { class: "notice", text: `Not sent, because they do not look like DOIs: ${unusable.join(", ")}` }));
@@ -470,22 +526,21 @@ function renderSearchPanel(result) {
   if (!$("search-on").checked) return;
   const { items, truncated, unreadable } = result.search;
   const panel = h("section", { class: "lookup", id: "search-panel", "aria-labelledby": "search-h" });
-  panel.append(h("h3", { id: "search-h", text: "Find possible DOIs by title (you turned this on)" }));
+  panel.append(h("h3", { id: "search-h", text: "Find possible DOIs by title" }));
   if (state.searchLog) {
     panel.append(h("p", { text: "What happened:" }),
       h("ul", {}, state.searchLog.map((l) => h("li", {}, h("code", { text: l.id }), ` \u2014 ${l.text}`))));
   } else if (items.length) {
     panel.append(
-      h("p", {}, `Nothing has been sent. If you press the button below, this page will make ${items.length} search request${items.length === 1 ? "" : "s"} to api.crossref.org, one at a time. This is exactly what each one contains:`),
+      h("p", {}, `Nothing has been sent. Pressing Send makes ${items.length} search${items.length === 1 ? "" : "es"} on api.crossref.org, one at a time. Each sends only these words:`),
       h("ul", {}, items.map((i) => h("li", {},
         h("strong", { text: `${i.id}: ` }), `\u201c${i.query}\u201d`, h("br"), h("code", { text: i.url })))),
-      h("p", { class: "help", text: "That is each reference's title, first author's family name and year. Crossref will also see your IP address and the usual request headers. No email address or key is used." }),
       h("div", { class: "exports" },
-        h("button", { type: "button", class: "btn primary", id: "search-go" }, `Send ${items.length} search${items.length === 1 ? "" : "es"} to Crossref`),
+        h("button", { type: "button", class: "btn", id: "search-go" }, `Send ${items.length} search${items.length === 1 ? "" : "es"}`),
         h("button", { type: "button", class: "btn", id: "search-cancel", hidden: true }, "Stop")),
-      h("p", { id: "search-progress", class: "help", role: "status", "aria-live": "polite" }));
+      h("p", { id: "search-progress", class: "hint", role: "status", "aria-live": "polite" }));
   } else {
-    panel.append(h("p", { text: "Nothing to search for: every reference either has a DOI or has no readable title. Nothing was sent." }));
+    panel.append(h("p", { text: "Nothing to search for: every reference has a DOI or no readable title. Nothing was sent." }));
   }
   if (truncated) panel.append(h("p", { class: "notice", text: `${truncated} more reference(s) are not shown. The demo searches at most 25 at a time.` }));
   if (unreadable.length) panel.append(h("p", { class: "notice", text: `Not searched, because no usable title could be read: ${unreadable.join(", ")}` }));
@@ -540,10 +595,13 @@ function init() {
   $("pyodide-version").textContent = PYODIDE_VERSION;
   $("check-form").addEventListener("submit", onSubmit);
   $("cat-input").addEventListener("change", onCatalogueFile);
-  $("cat-sample").addEventListener("change", () => { $("cat-status").textContent = ""; });
-  $("cat-file").addEventListener("change", () => {
-    $("cat-status").textContent = state.file ? `Using ${state.file.label}.` : "Choose a file below.";
-  });
+  const syncCatalogueChoice = () => {
+    const mine = $("cat-file").checked;
+    $("file-row").hidden = !mine;
+    $("cat-status").textContent = mine && state.file ? `Using ${state.file.label}.` : "";
+  };
+  $("cat-sample").addEventListener("change", syncCatalogueChoice);
+  $("cat-file").addEventListener("change", syncCatalogueChoice);
   $("clear-refs").addEventListener("click", () => { $("refs").value = ""; $("refs").focus(); });
   $("retry-engine").addEventListener("click", startEngine);
   $("crossref-on").addEventListener("change", () => { if (state.result) renderLookupPanel(state.result); });

@@ -26,7 +26,16 @@ def sideways_overflow(page: Any) -> int:
 
 
 def results_text(session: Any) -> str:
-    return session.page.inner_text("#results-body")
+    """All text in the results, including what sits inside collapsed "Details" sections."""
+    return session.page.text_content("#results-body")
+
+
+def tick(session: Any, box: str) -> None:
+    """Open "Optional: look things up online" like a person would, then tick a box."""
+    online = session.page.locator("#online")
+    if online.get_attribute("open") is None:
+        online.locator("summary").first.click()
+    session.page.check(box)
 
 
 def load_sample(session: Any, name: str) -> None:
@@ -46,7 +55,9 @@ def test_good_list(open_page: Any, shot: Any) -> None:
     expect(s.page.locator(".tile.no_verdict .big")).to_have_text("0 of 5")
     expect(s.page.locator(".tile.metadata_mismatch .big")).to_have_text("0 of 5")
     assert s.page.locator(".ref .badge.verified").count() == 5
-    assert "No other flags." in results_text(s)
+    assert "Also flagged" not in results_text(s)
+    for stray in ("null", "undefined", "[object"):
+        assert stray not in results_text(s), stray
     assert "A person must decide" in results_text(s)
     assert s.errors == []
     shot(s.page, "good-list-desktop-light")
@@ -77,8 +88,7 @@ def test_messy_list(open_page: Any, shot: Any) -> None:
     assert "same authors in a different order" in text
     assert "RETRACTED" in text and "DUPLICATE" in text
     assert "Also flagged: 1 duplicate" in text
-    line = "4 verified (40%) \u00b7 3 metadata mismatch (30%) \u00b7 3 no verdict (30%)"
-    assert f"Of 10 references: {line}." in text
+    assert "null" not in text and "undefined" not in text
     assert text.count("A person must decide.") >= 10
     assert not re.search(r"\b(fake|bogus|forged)\b", text, re.I)
     assert not re.search(
@@ -112,15 +122,16 @@ def test_pasted_text_example(open_page: Any, shot: Any) -> None:
     expect(page.locator(".tile.metadata_mismatch .big")).to_have_text("2 of 7")
     expect(page.locator(".tile.no_verdict .big")).to_have_text("5 of 7")
     text = results_text(s)
-    assert "(plain text)" in text and "not part of CiteProof" in text
+    assert "pasted text" in text and "not part of CiteProof" in text
     assert text.count("Possible match by title (advisory)") == 2
     assert "did not change the verdict" in text
     assert "initials" in text and "shortened list" in text
-    reads = page.locator("details.read")
+    reads = page.locator("details.more")
     assert reads.count() == 7
     reads.first.locator("summary").click()
+    expect(reads.first).to_contain_text("How this was read")
     expect(reads.first).to_contain_text("McKinney, W. (2010)")
-    expect(reads.first).to_contain_text("Layout recognised: APA or Harvard")
+    expect(reads.first).to_contain_text("Layout: APA or Harvard")
     expect(reads.first).to_contain_text("10.25080/Majora-92bf1922-00a")
     assert s.errors == []
     shot(page, "pasted-text-desktop-light")
@@ -290,7 +301,7 @@ def test_crossref_needs_a_second_explicit_step_and_shows_what_is_sent(
 ) -> None:
     s = open_page(crossref=crossref_ok)
     load_sample(s, "sample-references-messy.bib")
-    s.page.check("#crossref-on")
+    tick(s, "#crossref-on")
     s.check()
     panel = s.page.locator("#lookup-panel")
     expect(panel).to_contain_text("Nothing has been sent")
@@ -317,7 +328,7 @@ def test_crossref_needs_a_second_explicit_step_and_shows_what_is_sent(
     expect(s.page.locator(".tile.verified .big")).to_have_text("4 of 10")
     expect(s.page.locator(".tile.metadata_mismatch .big")).to_have_text("4 of 10")
     expect(s.page.locator(".tile.no_verdict .big")).to_have_text("2 of 10")
-    assert "live Crossref record" in text and "Crossref REST API" in text
+    assert "Crossref record" in text and "Crossref REST API" in text
     shot(s.page, "crossref-after-lookup-desktop-light")
 
 
@@ -331,7 +342,7 @@ def test_crossref_rate_limit_stops_politely(open_page: Any) -> None:
 
     s = open_page(crossref=limited)
     load_sample(s, "sample-references-messy.bib")
-    s.page.check("#crossref-on")
+    tick(s, "#crossref-on")
     s.check()
     s.page.click("#lookup-go")
     expect(s.page.locator("#lookup-panel")).to_contain_text(
@@ -349,7 +360,7 @@ def test_crossref_unreachable_is_a_readable_message(open_page: Any) -> None:
 
     s = open_page(crossref=down)
     load_sample(s, "sample-references-messy.bib")
-    s.page.check("#crossref-on")
+    tick(s, "#crossref-on")
     s.check()
     s.page.click("#lookup-go")
     expect(s.page.locator("#lookup-panel")).to_contain_text(
@@ -499,7 +510,7 @@ def test_title_search_shows_what_is_sent_and_sends_nothing_until_clicked(
         "year": "2019",
     }
     s = open_page(crossref=search_reply([crossref_item(decoy), crossref_item(NUMPY)]))
-    s.page.check("#search-on")
+    tick(s, "#search-on")
     s.check(NO_DOI_BIB)
     panel = s.page.locator("#search-panel")
     expect(panel).to_contain_text("Nothing has been sent")
@@ -519,7 +530,7 @@ def test_title_search_shows_what_is_sent_and_sends_nothing_until_clicked(
         assert leaked not in sent[0].url
     assert "mailto" not in sent[0].url and "cookie" not in sent[0].headers
     text = s.page.inner_text("#results-body")
-    assert "Possible DOIs found by Crossref (suggestions, not checked)" in text
+    assert "Possible DOIs from Crossref" in text
     assert "Nothing is chosen for you" in text
     assert "year matches" in text and "year differs" in text
     # Suggestions alone change nothing: the verdict is still "no verdict".
@@ -530,7 +541,7 @@ def test_title_search_shows_what_is_sent_and_sends_nothing_until_clicked(
 
 def test_picking_a_doi_reruns_citeproof_and_is_labelled(open_page: Any) -> None:
     s = open_page(crossref=search_reply([crossref_item(NUMPY)]))
-    s.page.check("#search-on")
+    tick(s, "#search-on")
     s.check(NO_DOI_BIB)
     s.page.click("#search-go")
     expect(s.page.locator(".candidates")).to_be_visible(timeout=30_000)
@@ -550,7 +561,7 @@ def test_title_search_rate_limit_stops_and_changes_nothing(open_page: Any) -> No
         )
 
     s = open_page(crossref=limited)
-    s.page.check("#search-on")
+    tick(s, "#search-on")
     s.check(NO_DOI_BIB)
     s.page.click("#search-go")
     expect(s.page.locator("#search-panel")).to_contain_text("slow down", timeout=60_000)
@@ -560,8 +571,66 @@ def test_title_search_rate_limit_stops_and_changes_nothing(open_page: Any) -> No
 
 def test_title_search_skips_references_with_a_doi_or_no_title(open_page: Any) -> None:
     s = open_page(crossref=search_reply([]))
-    s.page.check("#search-on")
+    tick(s, "#search-on")
     load_sample(s, "sample-references-good.bib")
     s.check()
     expect(s.page.locator("#search-panel")).to_contain_text("Nothing to search for")
     assert searches(s) == []
+
+
+# ----------------------------------------------------------------------- what is visible by default
+
+
+def test_the_essentials_are_visible_without_opening_anything(open_page: Any) -> None:
+    s = open_page()
+    load_sample(s, "sample-references-messy.bib")
+    s.check()
+    page = s.page
+    assert page.locator(".banner").is_visible()
+    expect(page.locator(".banner")).to_contain_text("A person must decide")
+    for kind in ("verified", "metadata_mismatch", "no_verdict"):
+        assert page.locator(f".tile.{kind} .big").is_visible()
+        assert page.locator(f".tile.{kind} .pct").is_visible()
+    card = page.locator("article", has=page.locator(".ref-id", has_text="invented2026"))
+    expect(card.locator(".badge")).to_have_text("NEEDS_REVIEW")  # CiteProof's own status
+    expect(card.locator(".headline")).to_have_text("Not found in this catalogue.")
+    # The evidence used is shown, not hidden.
+    expect(card.locator(".evidence").first).to_contain_text("10.9999/demo.invented-001")
+    expect(card.locator(".person")).to_contain_text("A person must decide")
+    mismatch = page.locator("article", has=page.locator(".ref-id", has_text="waskom2021"))
+    visible_evidence = mismatch.locator(".evidence").first
+    expect(visible_evidence).to_contain_text("near match, probably a typo")
+    # The long parts are folded away until asked for.
+    assert not card.locator("details.more .says").first.is_visible()
+    card.locator("details.more summary").click()
+    expect(card.locator(".says").first).to_contain_text("does not show it is fabricated")
+    # The not-checked panel is on the page, not hidden.
+    assert page.locator("#not-checked").is_visible()
+    expect(page.locator("#not-checked")).to_contain_text("Whether a reference is real")
+
+
+def test_the_start_screen_is_short(open_page: Any) -> None:
+    s = open_page()
+    page = s.page
+    assert page.locator("#refs").is_visible() and page.locator("#check-btn").is_visible()
+    # Explanations are folded away until asked for.
+    for hidden in ("#privacy ul", "#online .hint", "#sample-list"):
+        assert not page.locator(hidden).first.is_visible(), hidden
+    words = len(page.inner_text("main").split())
+    assert words < 400, f"start screen has {words} words in <main>"
+
+
+def test_filters_show_only_what_was_asked_for(open_page: Any) -> None:
+    s = open_page()
+    load_sample(s, "sample-references-messy.bib")
+    s.check()
+    page = s.page
+    items = page.locator(".refs > li")
+    assert items.filter(visible=True).count() == 10
+    page.click("[data-filter='NEEDS_REVIEW']")
+    assert items.filter(visible=True).count() == 3
+    expect(page.locator("[data-filter='NEEDS_REVIEW']")).to_have_attribute("aria-pressed", "true")
+    page.click("[data-filter='flagged']")
+    assert items.filter(visible=True).count() == 2
+    page.click("[data-filter='all']")
+    assert items.filter(visible=True).count() == 10
