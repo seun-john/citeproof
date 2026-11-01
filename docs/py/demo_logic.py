@@ -683,6 +683,12 @@ def build_result(
                     "value": "not searched (CiteProof looks records up by DOI)",
                 }
             )
+        if verdict in {"VERIFIED", "METADATA_MISMATCH"}:
+            accepted = comparison["evidence"].get("accepted_equivalences")
+            if accepted:
+                evidence.append(
+                    {"label": "Accepted as equivalent by CiteProof", "value": "; ".join(accepted)}
+                )
         if verdict == "NEEDS_REVIEW":
             raw = read_info.get(ref["id"], {}).get("raw")
             text = raw if raw else str(ref.get("title", ""))
@@ -758,6 +764,9 @@ def build_result(
     for key, count in counts.items():
         summary[key] = {"count": count, "percent": _percent(count, total)}
     summary["metadata_mismatch"]["only_given_names"] = initials_rows
+    coverage = report.get("coverage")  # CiteProof's own account of what it could not decide
+    if isinstance(coverage, dict) and coverage.get("undecided") == counts["no_verdict"]:
+        summary["no_verdict"]["reasons"] = coverage.get("reasons", {})
     summary["other_flags"] = flags_count
     return {
         "ok": True,

@@ -46,6 +46,11 @@ citeproof check input.json -o report.json --html report.html
 
 DOIs are compared after removing `https://doi.org/`, `http://dx.doi.org/`, `doi:` and trailing punctuation, and lowercasing. Author lists can be arrays or `"A; B and C"` strings. Years compare by their four digits, so `2020a` equals `2020`.
 
+Two equivalences are accepted rather than reported as mismatches, and are listed in the finding's `accepted_equivalences` so they stay visible:
+
+- **Abbreviated journal names.** `Nat Prod Rep` matches `Natural Product Reports`, `N Engl J Med` matches `New England Journal of Medicine`, in either direction. Each word must be the same word or its beginning (plus a few standard forms such as `Natl`), the word count must agree once `of`, `the` and `and` are ignored, and a single closing letter must match exactly, so `Nature` is not `Nature Medicine` and `Phys Rev A` is not `Physical Review Applied`. A subtitle after a colon in the catalogue name may be left out. Abbreviations that omit a word, or that are not on this pattern, are still reported as a journal mismatch.
+- **A `RETRACTED:`, `Retraction:` or `Withdrawn:` prefix on a title.** Publishers add it to the catalogue title; the citation does not carry it. The prefix is ignored for the comparison only. The retraction itself is still reported through `RETRACTED` when the catalogue flags it.
+
 ## Check claims
 
 ```bash
@@ -62,7 +67,9 @@ Findings: `NO_CITATION`, `SOURCE_UNAVAILABLE`, and `HUMAN_REVIEW_REQUIRED` for e
 
 ## Options common to every command
 
-`-o report.json`, `--html report.html`, and `--strict` (exit 1 when any finding is not `VERIFIED` for `check`, or any finding at all for `claims`). Exit codes: 0 audit completed, 1 strict findings, 2 unusable input. A completed audit that reports problems exits 0 unless you pass `--strict`.
+`-o report.json`, `--html report.html`, and `--strict` (exit 1 when any finding is not `VERIFIED` for `check`, or any finding at all for `claims`). Exit codes: 0 audit completed, 1 strict findings, 2 unusable input, 3 `--min-coverage` was not met. A completed audit that reports problems exits 0 unless you pass `--strict`.
+
+**Coverage.** `check` and `claims` add a `coverage` object and print a line on stderr, for example `coverage: decided 37 of 60 references; 23 could not be checked (not_in_catalogue 15, no_doi 8)`. For `check` the items are the references: one is decided when it matched a catalogue record (`VERIFIED` or `METADATA_MISMATCH`) and undecided when it has no DOI or its DOI is not in the catalogue you supplied. Undecided does not mean fabricated; this tool never looks anything up online. For `claims` the items are the claims, and only a missing citation is decided; the rest are undecided (`no_source_passage`, `abstract_or_snippet_only`, `needs_human_judgement`) because support is never decided here. `--min-coverage PCT` exits 3 when fewer than PCT percent of items were decided and nothing else failed.
 
 ## Limits
 

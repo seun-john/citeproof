@@ -80,6 +80,7 @@ def test_messy_list(open_page: Any, shot: Any) -> None:
     assert "same authors in a different order" in text
     assert "RETRACTED" in text and "DUPLICATE" in text
     assert "Also flagged: 1 duplicate" in text
+    assert "No verdict: 1 had no DOI \u00b7 2 were not in this catalogue." in text
     assert "null" not in text and "undefined" not in text
     assert text.count("A person must decide.") >= 10
     assert not re.search(r"\b(fake|bogus|forged)\b", text, re.I)

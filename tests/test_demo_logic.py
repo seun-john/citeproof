@@ -139,7 +139,8 @@ def test_no_verdict_is_reported_beside_verified() -> None:
     result = check(BIB.replace("10.1/x", "10.9/unknown"))
     s = result["summary"]
     assert s["verified"]["count"] == 0
-    assert s["no_verdict"] == {"count": 1, "percent": 100.0}
+    assert (s["no_verdict"]["count"], s["no_verdict"]["percent"]) == (1, 100.0)
+    assert s["no_verdict"]["reasons"] == {"not_in_catalogue": 1}
 
 
 def test_verdict_names_and_messages_are_citeproofs_own() -> None:
@@ -1290,3 +1291,34 @@ def test_the_sample_catalogue_gives_gap_filling_data_only_where_its_source_state
     assert (
         "volume" not in by_doi["10.21105/joss.03021"]
     )  # its source lists volume and issue swapped
+
+
+# ------------------------------------------- what CiteProof itself reports (coverage, equivalences)
+
+
+def test_the_no_verdict_reasons_are_citeproofs_own_coverage_and_add_up() -> None:
+    text = (DATA / "sample-references-ten.txt").read_text(encoding="utf-8")
+    result = check(text, CATALOGUE)
+    coverage = result["report"]["coverage"]
+    summary = result["summary"]
+    assert (
+        coverage["decided"] == summary["verified"]["count"] + summary["metadata_mismatch"]["count"]
+    )
+    assert coverage["undecided"] == summary["no_verdict"]["count"]
+    assert summary["no_verdict"]["reasons"] == {"no_doi": 2, "not_in_catalogue": 3}
+    assert sum(summary["no_verdict"]["reasons"].values()) == summary["no_verdict"]["count"]
+
+
+def test_equivalences_that_citeproof_accepted_are_shown_on_the_card() -> None:
+    record = {**REC, "title": "RETRACTED: A Study of Things", "journal": "Natural Product Reports"}
+    bib = BIB.replace("J Things", "Nat Prod Rep")
+    row = check(bib, [record])["rows"][0]
+    assert row["verdict"] == "VERIFIED"
+    labels = {e["label"]: e["value"] for e in row["evidence"]}
+    assert "abbreviation accepted" in labels["Accepted as equivalent by CiteProof"]
+    assert (
+        "retraction or withdrawal prefix ignored" in labels["Accepted as equivalent by CiteProof"]
+    )
+    assert "Catalogue searched" not in labels  # the verdict branches did not run into each other
+    plain = check(BIB, [REC])["rows"][0]
+    assert "Accepted as equivalent by CiteProof" not in {e["label"] for e in plain["evidence"]}

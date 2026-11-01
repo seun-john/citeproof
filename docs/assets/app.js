@@ -304,6 +304,13 @@ function renderMissing(item) {
       h("p", { class: "person", text: item.person_note })));
 }
 
+function undecidedLine(summary) {
+  const reasons = summary.no_verdict.reasons || {};
+  const words = { no_doi: "had no DOI", not_in_catalogue: "were not in this catalogue" };
+  const parts = Object.entries(reasons).map(([key, n]) => `${n} ${words[key] || key.replace(/_/g, " ")}`);
+  return parts.length ? `No verdict: ${parts.join(" \u00b7 ")}.` : null;
+}
+
 function flagsLine(flags) {
   const names = {
     RETRACTED: "marked retracted by the catalogue",
@@ -359,6 +366,7 @@ function renderResult(result) {
       return seg;
     })),
     s.metadata_mismatch.only_given_names ? h("p", { class: "flags-line", text: `${s.metadata_mismatch.only_given_names} of the ${s.metadata_mismatch.count} mismatch${s.metadata_mismatch.count === 1 ? "" : "es"} differ only in how given names are written (initials or full names).` }) : null,
+    undecidedLine(s) ? h("p", { class: "flags-line", text: undecidedLine(s) }) : null,
     extra ? h("p", { class: "flags-line", text: extra }) : null,
     h("details", { class: "legend how" },
       h("summary", { text: "What do these mean?" }),
