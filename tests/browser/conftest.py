@@ -95,9 +95,12 @@ class Session:
         self.page.locator("#engine.ready").wait_for(timeout=120_000)
 
     def check(self, text: str | None = None) -> None:
+        """Press Check and wait for the first results (or the error) to be on the page."""
         if text is not None:
             self.page.fill("#refs", text)
         self.page.click("#check-btn")
+        shown = self.page.locator("#results-body .tile, #results-body [role=alert]")
+        shown.first.wait_for(timeout=60_000)
 
 
 @pytest.fixture
@@ -114,13 +117,18 @@ def open_page(
         crossref: Callable[[Any], None] | None = None,
         wait: bool = True,
         online: bool = False,
+        device: dict[str, Any] | None = None,
+        init_script: str | None = None,
     ) -> Session:
         ctx = browser.new_context(
             viewport={"width": width, "height": height},
             color_scheme=scheme,
             accept_downloads=True,
+            **(device or {}),
         )
         contexts.append(ctx)
+        if init_script:
+            ctx.add_init_script(init_script)
         page = ctx.new_page()
         requests: list[Any] = []
         hooks: dict[str, Any] = {"blocked": []}

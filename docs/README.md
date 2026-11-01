@@ -58,6 +58,20 @@ After a check, **Reformat these references into another style** turns the whole 
 - **Known limits.** It does not change capitalisation for APA, Harvard, IEEE and AMA (it cannot know which words are proper nouns), does not abbreviate journal names for IEEE and AMA, and applies headline case automatically for MLA and Chicago. The engine does not implement two CSL details, so this project handles them in `docs/py/styles.py`: it moves a comma or full stop inside the closing quote for US styles, and it honours `initialize="false"` so MLA and Chicago keep full given names. **Always check the result against your style guide or your instructor's requirements.**
 - **Reformatting is not checking.** A formatted reference is not a verified one.
 
+## Phones
+
+The page is built for phones first: three result boxes on one row even on a small screen, controls at least 44 px tall on touch screens, text at least 16 px in inputs (so iOS does not zoom in), room for notches and rounded corners, a landscape layout, light and dark modes, and an icon for **Add to Home Screen**. Long DOIs and addresses wrap instead of pushing the page sideways.
+
+- **What is tested automatically** (`tests/browser/test_phones.py`, run in Chromium with touch and a phone user agent): seven screen sizes from a 280 px folding-phone cover screen to an iPad, portrait and landscape; no sideways overflow in every state; every control tappable at 44 px; very long unbroken text; 200% text size; dark mode; a browser without WebAssembly; a device that runs out of memory; and the "Checking…" label appearing before slow work.
+- **What is not covered:** Chromium is not Safari, and an emulated phone is not a real one. [phone-test-checklist.md](phone-test-checklist.md) is a ten-minute list for a real phone.
+- **Limits that matter on a phone.** The first visit downloads about 12 MB. Checking is instant, but reformatting runs on the phone and is limited to 150 references at a time. A very old or low-memory phone may not be able to start the engine; the page says so and suggests what to try.
+
+## Automated checks
+
+- `ci.yml` (yours) runs lint and CiteProof's tests on Linux, Windows and macOS.
+- `demo.yml` runs the demo's unit and browser tests, including the phone ones, in real Chromium against the real CDN, for every pull request that touches the demo, and keeps the screenshots as a download.
+- `live-check.yml` opens the **published** demo in a real browser every Monday (and on demand from the Actions tab) and fails if a file is missing, the pinned Pyodide checksum no longer matches the CDN, the engine does not load, the example gives a different answer, reformatting fails, or a live Crossref lookup returns nothing. GitHub emails you when it fails. You can run the same check yourself: `python scripts/live_check.py https://seun-john.github.io/citeproof/ --crossref`.
+
 ## Sample data
 
 `docs/data/sample-catalogue.json` holds seven real records, each with its source in its `provenance` field. It contains bibliographic facts only (DOI, title, authors, year, journal), no abstracts or article text.
@@ -69,7 +83,7 @@ After a check, **Reformat these references into another style** turns the whole 
 
 A record is marked `"retracted": false` only because its DOI is **not listed** in that dataset on that date. The provenance text says so.
 
-`sample-references-text.txt`, `sample-references-mixed.txt` (one reference in each of five layouts, for trying the reformatter), `sample-references-good.bib`, `sample-references-messy.bib` and `sample-references.json` are generated from the catalogue by `scripts/build_sample_references.py`. Each defect in the messy list is labelled. One entry, `invented2026`, is invented for the demo.
+`sample-references-ten.txt` (ten references that exercise every outcome), `sample-references-text.txt`, `sample-references-mixed.txt` (one reference in each of five layouts, for trying the reformatter), `sample-references-good.bib`, `sample-references-messy.bib` and `sample-references.json` are generated from the catalogue by `scripts/build_sample_references.py`. Each defect in the messy list is labelled. One entry, `invented2026`, is invented for the demo.
 
 ## Run it locally
 

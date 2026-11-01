@@ -1223,3 +1223,70 @@ def test_the_mixed_styles_example_reads_five_layouts_and_formats_every_reference
     assert not any("445" in e["text"] for e in formatted["entries"])  # nothing invented
     for entry in formatted["entries"]:
         assert re.match(r"^[^,]+, [A-Z]\..*\(\d{4}\)\.", entry["text"]), entry["text"]
+
+
+def test_reformatting_a_very_long_list_is_refused_with_a_clear_reason(engine: None) -> None:
+    many = "\n".join(
+        f"Author{i}, A. (2020). A paper about thing number {i}. Journal of Things, 4(2), 1-10."
+        for i in range(demo.MAX_REFORMAT + 1)
+    )
+    with pytest.raises(demo.DemoError) as caught:
+        demo.reformat(many, [REC], None, None, "apa")
+    assert caught.value.title == "Too many references to reformat at once"
+    assert "phone" in caught.value.message
+    assert len(demo.reformat(many.rsplit("\n", 1)[0], [REC], None, None, "apa")["entries"]) == 150
+
+
+# ------------------------------------------------------------- the examples shipped with the page
+
+
+def example_files() -> list[str]:
+    html = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
+    return re.findall(r'data-sample="([^"]+)"', html)
+
+
+def test_every_example_button_points_at_a_file_that_checks_cleanly() -> None:
+    paths = example_files()
+    assert len(paths) == len(set(paths)) >= 6
+    for path in paths:
+        text = (ROOT / "docs" / path).read_text(encoding="utf-8")
+        result = check(text, CATALOGUE)
+        assert result["summary"]["total"] >= 3, path
+        assert result["notices"] is not None
+
+
+def test_the_ten_reference_set_gives_the_outcomes_the_checklist_promises() -> None:
+    text = (DATA / "sample-references-ten.txt").read_text(encoding="utf-8")
+    result = check(text, CATALOGUE)
+    s = result["summary"]
+    assert (s["verified"]["count"], s["metadata_mismatch"]["count"], s["no_verdict"]["count"]) == (
+        2,
+        3,
+        5,
+    )
+    assert s["other_flags"]["DUPLICATE"] == 1 and s["other_flags"]["RETRACTED"] == 1
+    assert "445" not in text  # nothing invented
+    assert text.count("10.9999/demo.invented") == 1  # exactly one made-up reference
+
+
+def test_everything_the_page_fetches_exists() -> None:
+    manifest = json.loads((ROOT / "docs" / "py" / "engine-files.json").read_text(encoding="utf-8"))
+    for name in manifest["engine"]:
+        assert (ROOT / "docs" / "py" / name).is_file(), name
+    for name in manifest["csl"]:
+        assert (ROOT / "docs" / "csl" / name).is_file(), name
+    js = (ROOT / "docs" / "assets" / "app.js").read_text(encoding="utf-8")
+    for name in re.findall(r'"((?:citeproof/)?[a-z_]+\.py)"', js):
+        assert (ROOT / "docs" / "py" / name).is_file(), name
+    html = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
+    for ref in re.findall(r'(?:href|src)="((?:assets|data)/[^"]+)"', html):
+        assert (ROOT / "docs" / ref).is_file(), ref
+
+
+def test_the_sample_catalogue_gives_gap_filling_data_only_where_its_source_states_it() -> None:
+    by_doi = {r["doi"]: r for r in CATALOGUE}
+    assert by_doi["10.1038/s41586-020-2649-2"]["volume"] == "585"
+    assert by_doi["10.1038/s41592-019-0686-2"]["pages"] == "261–272"
+    assert (
+        "volume" not in by_doi["10.21105/joss.03021"]
+    )  # its source lists volume and issue swapped

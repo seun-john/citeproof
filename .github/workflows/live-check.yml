@@ -1,0 +1,29 @@
+name: Live demo check
+
+# Opens the published demo in a real browser once a week (and on demand) and fails if it has
+# stopped working: a missing file, a changed Pyodide checksum, an engine that will not load, or
+# a wrong answer. Nothing is sent except one DOI lookup to Crossref.
+on:
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Address of the published demo"
+        default: "https://seun-john.github.io/citeproof/"
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install playwright
+      - run: python -m playwright install --with-deps chromium
+      - name: Check the live demo
+        run: python scripts/live_check.py "${DEMO_URL:-https://seun-john.github.io/citeproof/}" --crossref
+        env:
+          DEMO_URL: ${{ inputs.url }}

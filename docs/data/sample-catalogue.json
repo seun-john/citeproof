@@ -1,5 +1,7 @@
 [
   {
+    "volume": "585",
+    "pages": "357–362",
     "doi": "10.1038/s41586-020-2649-2",
     "title": "Array programming with NumPy",
     "authors": [
@@ -36,6 +38,8 @@
     "provenance": "bibliographic fields from https://raw.githubusercontent.com/numpy/numpy/main/CITATION.bib (sha256 6b12115280759df0, retrieved 2026-10-20); retraction status: DOI not listed in the Retraction Watch dataset published by Crossref (https://gitlab.com/crossref/retraction-watch-data, commit a503965, 2026-10-19)"
   },
   {
+    "volume": "17",
+    "pages": "261–272",
     "doi": "10.1038/s41592-019-0686-2",
     "title": "SciPy 1.0: Fundamental Algorithms for Scientific Computing in Python",
     "authors": [
@@ -88,6 +92,8 @@
     ],
     "year": "2010",
     "journal": "Proceedings of the 9th Python in Science Conference",
+    "pages": "56–61",
+    "type": "paper-conference",
     "retracted": false,
     "provenance": "bibliographic fields from https://raw.githubusercontent.com/pandas-dev/pandas/main/CITATION.cff (sha256 a2e4df597d51899a, retrieved 2026-10-20); retraction status: DOI not listed in the Retraction Watch dataset published by Crossref (https://gitlab.com/crossref/retraction-watch-data, commit a503965, 2026-10-19)"
   },
@@ -118,6 +124,8 @@
     ],
     "year": "2014",
     "journal": "PeerJ",
+    "volume": "2",
+    "pages": "e453",
     "retracted": false,
     "provenance": "bibliographic fields from https://raw.githubusercontent.com/scikit-image/scikit-image/main/CITATION.cff (sha256 2222251b11c833b7, retrieved 2026-10-20); retraction status: DOI not listed in the Retraction Watch dataset published by Crossref (https://gitlab.com/crossref/retraction-watch-data, commit a503965, 2026-10-19)"
   },

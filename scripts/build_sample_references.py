@@ -185,6 +185,35 @@ def main() -> int:
     ]
     (DATA / "sample-references-mixed.txt").write_text("\n".join(mixed) + "\n", encoding="utf-8")
 
+    ten = [
+        "McKinney, Wes. 2010. \u201cData Structures for Statistical Computing in Python.\u201d "
+        "Proceedings of the 9th Python in Science Conference, 56\u201361. "
+        "https://doi.org/10.25080/Majora-92bf1922-00a",
+        "Waskom, Michael Lawrence. 2021. \u201cseaborn: statistical data visualization.\u201d "
+        "Journal of Open Source Software 6 (60): 3021. https://doi.org/10.21105/joss.03021",
+        "McKinney, W. (2010). Data structures for statistical computing in Python. Proceedings "
+        "of the 9th Python in Science Conference, 56\u201361. "
+        "https://doi.org/10.25080/Majora-92bf1922-00a",
+        "Van der Walt, S., Sch\u00f6nberger, J. L., Nunez-Iglesias, J., et al. (2014). "
+        "scikit-image: image processing in Python. PeerJ, 2, e453. "
+        "https://doi.org/10.7717/peerj.453",
+        "Hwang, W. S., Roh, S. I., Lee, B. C., et al. (2005). Patient-specific embryonic stem "
+        "cells derived from human SCNT blastocysts. Science. "
+        "https://doi.org/10.1126/science.1112286",
+        "Ioannidis, J. P. A. (2005). Why most published research findings are false. PLoS "
+        "Medicine, 2(8), e124. https://doi.org/10.1371/journal.pmed.0020124",
+        "Hunter, J. D. (2007). Matplotlib: A 2D graphics environment. Computing in Science & "
+        "Engineering, 9(3), 90\u201395. https://doi.org/10.1109/MCSE.2007.55",
+        "Harris, C. R., Millman, K. J., van der Walt, S. J., et al. (2020). Array programming "
+        "with NumPy. Nature, 585(7825), 357\u2013362.",
+        "Wilkinson, M. D., Dumontier, M., Aalbersberg, I. J., et al. (2016). The FAIR Guiding "
+        "Principles for scientific data management and stewardship. Scientific Data, 3(1), "
+        "160018.",
+        "Example, A. (2026). An invented reference written for testing the checker. Journal of "
+        "Examples, 1(1), 1\u201310. https://doi.org/10.9999/demo.invented-003",
+    ]
+    (DATA / "sample-references-ten.txt").write_text("\n".join(ten) + "\n", encoding="utf-8")
+
     example_json = {
         "references": [
             {
@@ -216,7 +245,7 @@ def main() -> int:
     }
     text = json.dumps(example_json, indent=2, ensure_ascii=False) + "\n"
     (DATA / "sample-references.json").write_text(text, encoding="utf-8")
-    print("Wrote 5 example files to docs/data/")
+    print("Wrote 6 example files to docs/data/")
     return 0
 
 

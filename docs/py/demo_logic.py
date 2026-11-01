@@ -38,6 +38,7 @@ MAX_CATALOGUE_CHARS = 8_000_000
 MAX_REFERENCES = 500
 MAX_CATALOGUE_RECORDS = 50_000
 MAX_LOOKUPS = 25
+MAX_REFORMAT = 150
 
 CROSSREF_WORKS = "https://api.crossref.org/works/"
 CROSSREF_SEARCH = "https://api.crossref.org/works?"
@@ -1125,6 +1126,13 @@ def reformat(
     refs = parsed["references"]
     if not isinstance(refs, list) or not all(isinstance(r, dict) for r in refs):
         raise explain_error(InputError("'references' must be list"))
+    if len(refs) > MAX_REFORMAT:
+        raise DemoError(
+            "Too many references to reformat at once",
+            f"The limit is {MAX_REFORMAT} ({len(refs)} found). Formatting runs on your device, "
+            "and a phone would be slow.",
+            "Paste a smaller batch, then reformat the next one.",
+        )
     ids = [str(r.get("id")) for r in refs]
     if len(set(ids)) != len(ids):
         raise explain_error(InputError("Reference ids must be unique"))

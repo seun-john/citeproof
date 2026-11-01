@@ -58,7 +58,12 @@ CFF_RECORDS: dict[str, dict[str, Any]] = {
         "authors": ["McKinney, Wes"],
         "year": "2010",
         "journal": "Proceedings of the 9th Python in Science Conference",
+        "pages": "56\u201361",
+        "type": "paper-conference",
         "checks": [
+            "start: 56",
+            "end: 61",
+            "collection-type: proceedings",
             "Data Structures for Statistical Computing in Python",
             "family-names: McKinney",
             "given-names: Wes",
@@ -99,7 +104,11 @@ CFF_RECORDS: dict[str, dict[str, Any]] = {
         ],
         "year": "2014",
         "journal": "PeerJ",
+        "volume": "2",
+        "pages": "e453",
         "checks": [
+            "volume: 2",
+            "start: e453",
             'title: "scikit-image: image processing in Python"',
             "family-names: van der Walt",
             "given-names: Stéfan J.",
@@ -176,11 +185,18 @@ def main() -> int:
     )
     records: list[dict[str, Any]] = []
 
-    # NumPy and SciPy: parsed with CiteProof's own BibTeX reader.
+    # NumPy and SciPy: parsed with CiteProof's own BibTeX reader. That reader keeps only the
+    # fields it compares, so volume and pages are read from the same text here.
     for name in ("numpy", "scipy"):
         (entry,) = parse_bibtex(texts[name])
+        volume = re.search(r"volume\s*=\s*\{(\d+)\}", texts[name])
+        pages = re.search(r"pages\s*=\s*\{([^}]+)\}", texts[name])
+        if not volume or not pages:
+            raise SystemExit(f"{name}: volume or pages not found in the source")
         records.append(
             {
+                "volume": volume.group(1),
+                "pages": pages.group(1).replace("--", "\u2013"),
                 "doi": entry["doi"],
                 "title": unlatex(entry["title"]),
                 "authors": [unlatex(a) for a in entry["authors"]],

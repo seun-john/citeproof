@@ -73,7 +73,7 @@ Findings: `NO_CITATION`, `SOURCE_UNAVAILABLE`, and `HUMAN_REVIEW_REQUIRED` for e
 
 ## Browser demo
 
-A static demo runs CiteProof's own Python in your browser with Pyodide: paste a reference list, see which references match a catalogue, and export the results. Nothing you paste leaves your device unless you turn on the optional, off-by-default Crossref lookup. See [docs/README.md](docs/README.md) for the privacy note, its limits and how to run it locally.
+A static demo runs CiteProof's own Python in your browser with Pyodide: paste a reference list, see which references match a catalogue, and export the results. Nothing you paste leaves your device unless you turn on the optional, off-by-default Crossref lookup. Once GitHub Pages is switched on (Settings, Pages, deploy from branch, `/docs`) it is at `https://seun-john.github.io/citeproof/`. See [docs/README.md](docs/README.md) for the privacy note, its limits and how to run it locally, and [docs/phone-test-checklist.md](docs/phone-test-checklist.md) for testing it on a phone.
 
 ## Develop
 

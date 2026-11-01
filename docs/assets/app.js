@@ -59,7 +59,24 @@ function setEngine(text, ready = false) {
   $("engine").classList.toggle("ready", ready);
 }
 
+/* Let the browser paint (for example "Checking...") before a long synchronous step. */
+const paint = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+
 /* ---------- loading the Python engine ---------- */
+
+function explainLoadFailure(error) {
+  const text = String((error && error.message) || error);
+  if (typeof WebAssembly !== "object") {
+    return "This browser cannot run WebAssembly, which the Python engine needs. Try a current version of Safari, Chrome, Firefox or Edge.";
+  }
+  if (/memory|RangeError|allocation/i.test(text) || (error && error.name === "RangeError")) {
+    return "This device ran out of memory while starting the Python engine. Close other tabs or apps and try again, or use a computer.";
+  }
+  if (/integrity|digest|SRI/i.test(text)) {
+    return "The browser refused the Python engine because it did not match its expected checksum, so it was not run. Try again; if it keeps happening, the download is being altered on the way (for example by a network filter).";
+  }
+  return `The Python engine could not be started (${text}). You may be offline, or a filter or extension may be blocking cdn.jsdelivr.net.`;
+}
 
 function loadScript(src, integrity) {
   return new Promise((resolve, reject) => {
@@ -74,11 +91,20 @@ function loadScript(src, integrity) {
 }
 
 async function startEngine() {
+  if (typeof WebAssembly !== "object") {
+    $("engine").hidden = true;
+    $("engine-failed").hidden = false;
+    $("engine-failed-text").textContent = explainLoadFailure(new Error("no WebAssembly"));
+    $("check-hint").textContent = "The checker is unavailable in this browser.";
+    return;
+  }
   $("engine-failed").hidden = true;
   $("engine").hidden = false;
   setEngine("Loading the Python engine (about 12 MB, first visit only)…");
   const slow = setTimeout(
     () => setEngine("Still loading. This can take a minute on a slow connection…"), 20000);
+  const verySlow = setTimeout(
+    () => setEngine("Still loading after 90 seconds. Your connection may be slow, or this device may be short of memory. You can keep waiting, or close other tabs and reload."), 90000);
   try {
     if (!window.loadPyodide) await loadScript(`${PYODIDE_BASE}pyodide.js`, PYODIDE_SRI);
     const pyodide = await window.loadPyodide({ indexURL: PYODIDE_BASE });
@@ -105,12 +131,12 @@ async function startEngine() {
     console.error(error);
     $("engine").hidden = true;
     $("engine-failed").hidden = false;
-    $("engine-failed-text").textContent =
-      `This demo needs Pyodide, the Python engine for browsers, and it could not be started (${error.message}).`;
+    $("engine-failed-text").textContent = explainLoadFailure(error);
     $("check-hint").textContent = "The checker is unavailable until the engine loads.";
     $("retry-engine").focus();
   } finally {
     clearTimeout(slow);
+    clearTimeout(verySlow);
   }
 }
 
@@ -418,8 +444,17 @@ async function onSubmit(event) {
   state.reformat.out = null;
   state.checkedText = $("refs").value;
   state.catalogueUsed = chosenCatalogue();
-  const first = runCheck();
-  if (first) await runOnline();
+  const button = $("check-btn");
+  button.disabled = true;
+  button.textContent = "Checking\u2026";
+  await paint();
+  try {
+    const first = runCheck();
+    if (first) await runOnline();
+  } finally {
+    button.disabled = false;
+    button.textContent = "Check references";
+  }
 }
 
 /* ---------- Crossref lookups (on by default, switchable) ---------- */
@@ -609,6 +644,8 @@ async function doReformat() {
   try {
     setReformatStatus(state.styleReady ? "Formatting…" : "Loading the citation style engine (about 3 MB, once)…");
     await ensureStyleEngine();
+    setReformatStatus("Formatting\u2026");
+    await paint();
     const catalogue = state.catalogueUsed;
     const out = call("api_reformat", state.checkedText, JSON.stringify(catalogue.records),
       state.extra.length ? JSON.stringify(state.extra) : "",
