@@ -44,6 +44,8 @@ addopts = "-ra --strict-markers"
 
 [tool.ruff]
 line-length = 100
+# Third-party code copied unmodified for the browser demo (see docs/csl/NOTICE.md).
+extend-exclude = ["docs/py/citeproc"]
 target-version = "py310"
 src = ["src", "tests"]
 

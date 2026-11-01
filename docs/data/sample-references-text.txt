@@ -1,0 +1,8 @@
+References
+McKinney, W. (2010). Data structures for statistical computing in Python. Proceedings of the 9th Python in Science Conference, 56–61. https://doi.org/10.25080/Majora-92bf1922-00a
+Harris, C. R., Millman, K. J., van der Walt, S. J., Gommers, R., … & Oliphant, T. E. (2020). Array programming with NumPy. Nature, 585(7825), 357–362.
+Waskom, Michael L. “Seaborn: statistical data visualization.” Journal of Open Source Software, vol. 6, no. 60, 2021, p. 3021.
+Pedregosa F, Varoquaux G, Gramfort A, Michel V. Scikit-learn: machine learning in Python. J Mach Learn Res. 2011;12:2825-30.
+Wilkinson, M. D., Dumontier, M., Aalbersberg, I. J., et al. (2016). The FAIR Guiding Principles for scientific data management and stewardship. Scientific Data, 3, 160018. https://doi.org/10.1038/sdata.2016.18
+my notes: still need to find the source for the 2019 survey figure
+Van der Walt, S., Schönberger, J. L., Nunez-Iglesias, J., Boulogne, F., Warner, J. D., Yager, N., … & Yu, T. (2014). scikit-image: image processing in Python. PeerJ, 2, e453. https://doi.org/10.7717/peerj.453

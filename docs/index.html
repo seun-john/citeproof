@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; connect-src 'self' https://cdn.jsdelivr.net https://api.crossref.org; style-src 'self'; img-src 'self' data:; manifest-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#e6eefc" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#16233a" media="(prefers-color-scheme: dark)">
+<meta name="description" content="Paste a reference list and see which references match a catalogue of known records. Runs CiteProof inside your browser.">
+<title>CiteProof in your browser</title>
+<link rel="icon" href="assets/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="assets/icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="assets/app.css">
+<script src="assets/app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#check-form">Skip to the checker</a>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">CiteProof</p>
+    <h1>Check your references</h1>
+    <p class="lead">Paste your reference list and see which references match a trusted catalogue.</p>
+    <p class="privacy-pill">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2h1a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h1Zm2 0h6V8a3 3 0 0 0-6 0v2Z"/></svg>
+      <span>Checked in your browser. Only DOIs or titles go to Crossref, and you can switch that off.</span>
+    </p>
+    <details class="how" id="privacy">
+      <summary>How your data is handled</summary>
+      <ul>
+        <li>Your list, any catalogue file and the results stay in this tab, apart from the Crossref lookups below. No server, account, cookies or analytics.</li>
+        <li>On opening, the page downloads its own files and the Python engine (Pyodide <span id="pyodide-version">0.29.5</span>) from <code>cdn.jsdelivr.net</code>. Nothing you type is in those downloads. The first time you use <em>Reformat</em>, the style engine (about 3 MB, including <code>lxml</code> from the same CDN) downloads too, and the formatting runs on your device.</li>
+        <li>The Crossref lookups are <strong>on</strong> and can be switched off just above the Check button. When on, pressing Check sends the DOIs that are not in the catalogue, and the title, first author's family name and year of references with no DOI, to <code>api.crossref.org</code>. Nothing else leaves your device.</li>
+      </ul>
+    </details>
+  </div>
+</header>
+
+<main class="wrap" id="main">
+
+
+  <div id="engine" class="engine" role="status" aria-live="polite">
+    <span class="spinner" aria-hidden="true"></span>
+    <span id="engine-text">Loading the Python engine (about 12 MB, first visit only)&hellip;</span>
+  </div>
+
+  <div id="engine-failed" class="error" role="alert" hidden>
+    <h2>The Python engine could not be loaded</h2>
+    <p id="engine-failed-text">This demo needs Pyodide, the Python engine for browsers, and it could not be downloaded.</p>
+    <p><strong>Nothing you pasted has been sent anywhere.</strong> You may be offline, or a filter or extension may be blocking <code>cdn.jsdelivr.net</code>.</p>
+    <p>You can retry, or run CiteProof on your own computer: <code>pip install git+https://github.com/seun-john/citeproof.git</code></p>
+    <p><button type="button" id="retry-engine" class="btn">Try again</button></p>
+  </div>
+
+  <noscript>
+    <div class="error"><p>This demo needs JavaScript and WebAssembly. CiteProof also runs on the command line: <code>pip install git+https://github.com/seun-john/citeproof.git</code></p></div>
+  </noscript>
+
+  <form id="check-form" class="card" novalidate>
+
+    <div class="field">
+      <div class="field-head">
+        <label for="refs" class="field-label" id="step1-h">Your references</label>
+        <button type="button" class="link-btn" id="clear-refs">Clear</button>
+      </div>
+      <textarea id="refs" name="refs" rows="9" spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="refs-help" placeholder="Paste your references here, one per line or paragraph.&#10;&#10;Smith, J., &amp; Doe, A. (2020). A study of things. Journal of Things, 4(2), 1-10. https://doi.org/10.1234/example"></textarea>
+      <p id="refs-help" class="hint">Paste as it appears in your document or Google Scholar. BibTeX and JSON work too.</p>
+      <div class="chips" role="group" aria-label="Load an example list">
+        <span class="chips-label">Try an example:</span>
+        <button type="button" class="chip" data-sample="data/sample-references-text.txt">Pasted text</button>
+        <button type="button" class="chip" data-sample="data/sample-references-mixed.txt">Mixed styles</button>
+        <button type="button" class="chip" data-sample="data/sample-references-good.bib">All match</button>
+        <button type="button" class="chip" data-sample="data/sample-references-messy.bib">Messy list</button>
+        <button type="button" class="chip" data-sample="data/sample-references-ten.txt">10-reference test</button>
+        <button type="button" class="chip" data-sample="data/sample-references.json">JSON</button>
+      </div>
+    </div>
+
+    <fieldset class="field">
+      <legend class="field-label" id="step2-h">Compare against</legend>
+      <div class="segmented">
+        <input type="radio" id="cat-sample" name="catalogue" value="sample" checked>
+        <label for="cat-sample">Sample catalogue <span id="sample-count" class="muted"></span></label>
+        <input type="radio" id="cat-file" name="catalogue" value="file">
+        <label for="cat-file">My own file</label>
+      </div>
+      <div class="file-row" id="file-row" hidden>
+        <label for="cat-input" class="file-label">Choose a CSV or JSON catalogue file</label>
+        <input type="file" id="cat-input" accept=".csv,.json,text/csv,application/json" aria-describedby="cat-status">
+      </div>
+      <p id="cat-status" class="hint" role="status" aria-live="polite"></p>
+      <details class="how">
+        <summary>About catalogues</summary>
+        <p class="hint">A catalogue is a list of records you trust. Each reference is looked up <strong>by DOI</strong>; if it is not in the catalogue it gets no verdict. The sample has 7 real records, deliberately small.</p>
+        <ul id="sample-list" class="sample-list"></ul>
+        <p class="hint"><a href="data/sample-catalogue.json" download>Download the sample (JSON)</a></p>
+        <p class="hint"><strong>Your own file.</strong> JSON is CiteProof's format: a list of records, each with a <code>doi</code>. CSV is a convenience of this demo: a header row with <code>doi</code> (required), <code>title, authors, year, journal, retracted, provenance</code>. Rows with no DOI are skipped. A blank <code>retracted</code> means &ldquo;not known&rdquo;.</p>
+        <pre tabindex="0">doi,title,authors,year,journal,retracted,provenance
+10.1234/example,A study of things,Smith; Doe,2020,Journal of Things,false,My library</pre>
+      </details>
+    </fieldset>
+
+    <fieldset class="field online" id="online">
+      <legend class="field-label">Look up missing records on Crossref</legend>
+      <div class="choice">
+        <input type="checkbox" id="crossref-on" checked aria-describedby="crossref-help">
+        <label for="crossref-on">Look up DOIs that are not in the catalogue</label>
+      </div>
+      <p id="crossref-help" class="hint">Sends only the DOI.</p>
+      <div class="choice">
+        <input type="checkbox" id="search-on" checked aria-describedby="search-help">
+        <label for="search-on">Suggest DOIs for references that have none</label>
+      </div>
+      <p id="search-help" class="hint">Sends the reference's title, first author's family name and year. You choose; nothing is picked for you.</p>
+      <p class="hint">Runs automatically when you press Check. Untick both to keep everything on this device.</p>
+      <details class="how">
+        <summary>What exactly is sent?</summary>
+        <ul>
+          <li>Requests go to <code>api.crossref.org</code>, one at a time. Crossref also sees your IP address and the usual request headers. No email address, key or cookie is used.</li>
+          <li>The results show every address that was sent.</li>
+          <li>Lookups are rate-limited. If Crossref asks the page to slow down, it stops and says so.</li>
+          <li>A DOI Crossref does not know is still &ldquo;not found&rdquo;, not &ldquo;wrong&rdquo;.</li>
+        </ul>
+      </details>
+    </fieldset>
+
+    <div class="actions">
+      <button type="submit" id="check-btn" class="btn primary" disabled>Check references</button>
+      <span id="check-hint" class="muted">Available when the Python engine has loaded.</span>
+    </div>
+    <p class="hint"><a href="#not-checked">What this does not check</a></p>
+  </form>
+
+  <section id="results" class="results" aria-labelledby="results-h" tabindex="-1" hidden>
+    <h2 id="results-h" tabindex="-1">Results</h2>
+    <div id="results-body"></div>
+  </section>
+
+  <section class="not-checked" id="not-checked" aria-labelledby="nc-h">
+    <h2 id="nc-h">What this does not check</h2>
+    <ul>
+      <li><strong>Whether a reference is real.</strong> &ldquo;Not found in this catalogue&rdquo; says nothing either way.</li>
+      <li><strong>Whether a source supports your claim.</strong> A reference can match a real record and still be cited for the wrong reason. (CiteProof's separate <code>claims</code> command only routes this to a person, and is not part of this demo.)</li>
+      <li><strong>Your writing.</strong> It does not read your paper, and is not an AI or plagiarism detector.</li>
+      <li><strong>Source quality or citation style.</strong> Only DOI, title, authors, year and journal are compared, by wording.</li>
+      <li><strong>Retractions</strong> beyond what the catalogue says.</li>
+      <li><strong>Pasted-text reading.</strong> This page's own reader can misread unusual layouts. Each result shows how it was read.</li>
+      <li><strong>Reformatting is not checking.</strong> The style converter formats what was read, and does not check that a reference is real. Check its output against your style guide.</li>
+      <li><strong>Decisions.</strong> Nothing here is an academic-integrity finding. A person decides.</li>
+    </ul>
+  </section>
+
+</main>
+
+<footer class="wrap">
+  <p>CiteProof <span id="cp-version"></span> &middot; MIT licence &middot; <a href="https://github.com/seun-john/citeproof">Source</a> &middot; <a href="https://github.com/seun-john/citeproof/blob/main/docs/README.md">Privacy, limits and local use</a> &middot; Built with Claude Code (<a href="https://github.com/seun-john/citeproof/blob/main/docs/README.md#ai-use-note">AI-use note</a>)</p>
+  <p>Citation styles are the official <a href="https://citationstyles.org/">CSL</a> files (CC BY-SA 3.0), formatted by <a href="https://pypi.org/project/citeproc-py/">citeproc-py</a> (BSD). <a href="https://github.com/seun-john/citeproof/blob/main/docs/csl/NOTICE.md">Credits and licences</a>.</p>
+</footer>
+
+</body>
+</html>

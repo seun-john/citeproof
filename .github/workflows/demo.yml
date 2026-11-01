@@ -1,0 +1,37 @@
+name: Demo (browser)
+
+# Runs the browser demo's tests in real Chromium, including the phone-sized ones, against the
+# real Pyodide CDN. CiteProof's own tests still run in ci.yml.
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**", "tests/**", "scripts/**", ".github/workflows/demo.yml"]
+  pull_request:
+    paths: ["docs/**", "tests/**", "scripts/**", ".github/workflows/demo.yml"]
+  workflow_dispatch:
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]" lxml playwright
+      - run: python -m playwright install --with-deps chromium
+      - name: Unit tests, including the citation-style engine
+        run: python -m pytest tests -q --ignore=tests/browser
+      - name: Check the copy of CiteProof used by the demo is identical to src/
+        run: python scripts/sync_citeproof.py --check
+      - name: Browser and phone tests
+        run: python -m pytest tests/browser -q
+        env:
+          SCREENSHOT_DIR: screenshots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: demo-screenshots
+          path: screenshots
+          if-no-files-found: ignore
