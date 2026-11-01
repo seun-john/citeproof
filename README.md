@@ -51,6 +51,12 @@ Two equivalences are accepted rather than reported as mismatches, and are listed
 - **Abbreviated journal names.** `Nat Prod Rep` matches `Natural Product Reports`, `N Engl J Med` matches `New England Journal of Medicine`, in either direction. Each word must be the same word or its beginning (plus a few standard forms such as `Natl`), the word count must agree once `of`, `the` and `and` are ignored, and a single closing letter must match exactly, so `Nature` is not `Nature Medicine` and `Phys Rev A` is not `Physical Review Applied`. A subtitle after a colon in the catalogue name may be left out. Abbreviations that omit a word, or that are not on this pattern, are still reported as a journal mismatch.
 - **A `RETRACTED:`, `Retraction:` or `Withdrawn:` prefix on a title.** Publishers add it to the catalogue title; the citation does not carry it. The prefix is ignored for the comparison only. The retraction itself is still reported through `RETRACTED` when the catalogue flags it.
 
+### Optional: given names written as initials
+
+APA and most citation managers write `McKinney, W.`, while a catalogue usually holds `McKinney, Wes`. By default CiteProof compares given names letter for letter, so that is a `METADATA_MISMATCH` ("different authors"). Pass `--match-initials` (or `citeproof(data, match_initials=True)`) to accept it. It is **off by default**, because an initial cannot tell `Ann` from `Alan`, and it is listed in `accepted_equivalences` as `authors: given names matched by initials` whenever it is used.
+
+It matches only when the two author lists have the same length and order, every family name is the same, and each given name is either identical or one side is just the first letter of the other (`J. P. A.` and `John P. A.`). Two different full names (`Wes`, `William`), a different initial, a missing given name, or a different number of given names never match, and a difference in any other field is still reported.
+
 ## Check claims
 
 ```bash

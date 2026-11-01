@@ -39,6 +39,35 @@ def _authors(value: Any) -> list[str]:
     return [norm(_given_family(str(a))) for a in value if str(a).strip()]
 
 
+def _initials_compatible(mine: str, theirs: str) -> bool:
+    """Do two normalised 'given family' names differ only in how the given names are written?
+
+    The family name is the run of words the two names share at the end. What is left must have
+    the same number of words, and each pair must be identical or one must be the first letter of
+    the other: `w mckinney` and `wes mckinney`, `j p a ioannidis` and `john p a ioannidis`.
+    Two different full names (`wes`, `william`) never match, and at least one pair must actually
+    be abbreviated, so identical names are not this function's concern.
+    """
+    a, b = mine.split(), theirs.split()
+    shared = 0
+    while shared < min(len(a), len(b)) and a[-1 - shared] == b[-1 - shared]:
+        shared += 1
+    if shared == 0:
+        return False
+    given_a, given_b = a[: len(a) - shared], b[: len(b) - shared]
+    if not given_a or len(given_a) != len(given_b):
+        return False
+    abbreviated = False
+    for x, y in zip(given_a, given_b, strict=True):
+        if x == y:
+            continue
+        short, long = (x, y) if len(x) < len(y) else (y, x)
+        if len(short) != 1 or not long.startswith(short):
+            return False
+        abbreviated = True
+    return abbreviated
+
+
 def _year(value: Any) -> str:
     match = re.search(r"\d{4}", str(value))
     return match.group() if match else norm(value)
@@ -111,12 +140,16 @@ def _tokens_abbreviate(a: list[str], b: list[str]) -> bool:
 
 
 def compare_metadata(
-    ref: dict[str, Any], record: dict[str, Any], notes: list[str] | None = None
+    ref: dict[str, Any],
+    record: dict[str, Any],
+    notes: list[str] | None = None,
+    match_initials: bool = False,
 ) -> dict[str, Any]:
     """Field-by-field differences between a reference and its catalogue record.
 
     Equivalences that were accepted rather than ignored (an abbreviated journal name, a
-    'RETRACTED:' title prefix) are appended to `notes` so the caller can show them.
+    'RETRACTED:' title prefix, and with `match_initials` given names written as initials) are
+    appended to `notes` so the caller can show them.
     """
     differences: dict[str, Any] = {}
     for field in ("title", "authors", "year", "journal"):
@@ -126,6 +159,16 @@ def compare_metadata(
         if field == "authors":
             mine, theirs = _authors(ref[field]), _authors(record[field])
             if mine == theirs:
+                continue
+            if (
+                match_initials
+                and len(mine) == len(theirs)
+                and all(
+                    m == t or _initials_compatible(m, t) for m, t in zip(mine, theirs, strict=True)
+                )
+            ):
+                if notes is not None:
+                    notes.append("authors: given names matched by initials")
                 continue
             same_people = sorted(mine) == sorted(theirs)
             differences[field] = {
@@ -164,7 +207,7 @@ def compare_metadata(
     return differences
 
 
-def citeproof(data: dict[str, Any]) -> dict[str, Any]:
+def citeproof(data: dict[str, Any], *, match_initials: bool = False) -> dict[str, Any]:
     refs = require(data, "references", list)
     records = require(data, "catalogue", list)
     citations = require(data, "citations", list)
@@ -209,7 +252,7 @@ def citeproof(data: dict[str, Any]) -> dict[str, Any]:
             )
         else:
             notes: list[str] = []
-            differences = compare_metadata(ref, record, notes)
+            differences = compare_metadata(ref, record, notes, match_initials)
             extra = {"accepted_equivalences": notes} if notes else {}
             out.append(
                 finding(

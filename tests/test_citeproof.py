@@ -393,3 +393,91 @@ def test_cli_bad_json_exits_2(tmp_path: Path) -> None:
     src = tmp_path / "in.json"
     src.write_text('{"x": NaN}', encoding="utf-8")
     assert main(["claims", str(src)]) == 2
+
+
+# ---- opt-in: given names written as initials -------------------------------------------------
+
+
+def initials_run(cited: list[str], held: list[str], **kw: Any) -> dict[str, Any]:
+    data = {
+        "references": [ref(authors=cited)],
+        "catalogue": [rec(authors=held)],
+        "citations": ["a"],
+    }
+    return citeproof(data, **kw)
+
+
+@pytest.mark.parametrize(
+    ("cited", "held"),
+    [
+        (["Lovelace, A."], ["Lovelace, Ada"]),
+        (["A. Lovelace"], ["Ada Lovelace"]),
+        (["Lovelace, A.", "Turing, A. M."], ["Lovelace, Ada", "Turing, Alan Mathison"]),
+        (["Ioannidis, J. P. A."], ["Ioannidis, John P. A."]),
+        (["van der Walt, S. J."], ["van der Walt, Stéfan J."]),
+        (["Lee, M.-J."], ["Lee, Min-Jun"]),
+        (["Lovelace, Ada"], ["Lovelace, A."]),  # either side may be the abbreviated one
+    ],
+)
+def test_initials_are_matched_only_when_asked(cited: list[str], held: list[str]) -> None:
+    default = initials_run(cited, held)
+    assert statuses(default) == ["METADATA_MISMATCH"]  # unchanged unless the option is on
+    assert (
+        default["findings"][0]["evidence"]["differences"]["authors"]["note"] == "different authors"
+    )
+    result = initials_run(cited, held, match_initials=True)
+    assert statuses(result) == ["VERIFIED"]
+    assert result["findings"][0]["evidence"]["accepted_equivalences"] == [
+        "authors: given names matched by initials"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("cited", "held"),
+    [
+        (["Lovelace, B."], ["Lovelace, Ada"]),  # a different initial
+        (["Lovelace, Wes"], ["Lovelace, William"]),  # two different full names
+        (["Smith, A."], ["Jones, Ada"]),  # a different family name
+        (["Lovelace, A."], ["Lovelace, Ada", "Turing, Alan"]),  # a different number of authors
+        (["Turing, A.", "Lovelace, A."], ["Lovelace, Ada", "Turing, Alan"]),  # a different order
+        (["Lovelace, A. B."], ["Lovelace, Ada"]),  # a different number of given names
+        (["Lovelace"], ["Lovelace, Ada"]),  # no given name at all
+    ],
+)
+def test_initials_never_match_different_people(cited: list[str], held: list[str]) -> None:
+    result = initials_run(cited, held, match_initials=True)
+    assert statuses(result) == ["METADATA_MISMATCH"]
+
+
+def test_matching_initials_does_not_hide_other_differences() -> None:
+    result = citeproof(
+        {
+            "references": [ref(authors=["Lovelace, A."], year=1999)],
+            "catalogue": [rec(authors=["Lovelace, Ada"])],
+            "citations": ["a"],
+        },
+        match_initials=True,
+    )
+    differences = result["findings"][0]["evidence"]["differences"]
+    assert set(differences) == {"year"}
+    assert statuses(result) == ["METADATA_MISMATCH"]
+
+
+def test_cli_flag_turns_the_option_on(tmp_path: Path) -> None:
+    src = tmp_path / "in.json"
+    src.write_text(
+        json.dumps(
+            {
+                "references": [ref(authors=["Lovelace, A.", "Turing, A."])],
+                "catalogue": [rec(authors=["Lovelace, Ada", "Turing, Alan"])],
+                "citations": ["a"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    plain, flagged = tmp_path / "plain.json", tmp_path / "flagged.json"
+    assert main(["check", str(src), "-o", str(plain), "--strict"]) == 1
+    assert main(["check", str(src), "-o", str(flagged), "--strict", "--match-initials"]) == 0
+    got = json.loads(flagged.read_text(encoding="utf-8"))["findings"][0]
+    assert got["status"] == "VERIFIED"
+    assert got["evidence"]["accepted_equivalences"] == ["authors: given names matched by initials"]

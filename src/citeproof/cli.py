@@ -15,7 +15,7 @@ from .runner import Command, main_wrapper, run
 
 
 def _check(args: argparse.Namespace, data: Any) -> dict[str, Any]:
-    return citeproof(data)
+    return citeproof(data, match_initials=args.match_initials)
 
 
 def _claims(args: argparse.Namespace, data: Any) -> dict[str, Any]:
@@ -50,7 +50,21 @@ def _from_bibtex(args: argparse.Namespace, data: Any) -> dict[str, Any]:
 
 
 COMMANDS = {
-    "check": Command(_check, "Compare references with a catalogue", frozenset({"VERIFIED"})),
+    "check": Command(
+        _check,
+        "Compare references with a catalogue",
+        frozenset({"VERIFIED"}),
+        options=[
+            (
+                ("--match-initials",),
+                {
+                    "action": "store_true",
+                    "help": "accept 'McKinney, W.' as 'McKinney, Wes' when the family names match "
+                    "(listed in accepted_equivalences; off by default)",
+                },
+            )
+        ],
+    ),
     "claims": Command(_claims, "Route claims and their source passages to human review"),
     "from-bibtex": Command(
         _from_bibtex,
